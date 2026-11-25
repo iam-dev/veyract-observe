@@ -60,11 +60,14 @@ export interface ProjectedCapture {
   promptLength?: number;
   pathCategory?: PathCategory;
   commandCategory?: CommandCategory;
-  detail?: { path?: string; command?: string };
+  /** `detailed`+: restricted command form only. File paths are sensitive-local (R2-01), in SensitiveDetail.path. */
+  detail?: { command?: string };
 }
 
 /** Associated with its parent capture by the caller (Plan 2 spool row). */
 export interface SensitiveDetail {
+  /** Validated repo-relative path (R2-01: file names are sensitive-local only). */
+  path?: string;
   command?: string;
   todoSubjects?: Array<{ subject: string; status: TodoStatus }>;
   subagentDescription?: string;
