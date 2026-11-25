@@ -6,3 +6,5 @@ export * from './commands.js';
 export * from './tool-fields.js';
 export * from './project-hook.js';
 export * from './task-tag.js';
+export * from './otlp-numbers.js';
+export * from './project-otlp.js';
