@@ -22,6 +22,18 @@ export function isEmailExempt(sha) {
   return EMAIL_EXEMPT_COMMITS.has(sha);
 }
 
+// GitHub-created merge commits already published on main (PR #1 was merged with a merge commit; the repo
+// should allow rebase merges only). Exempt by full SHA from the merge and email rules only, and only while
+// the merge tree equals its second parent's tree, i.e. the merge introduces nothing that was not scanned.
+// Its message is still scanned.
+const PUBLISHED_MERGES = new Set(['7640f5c2a033fc7fed3ed49707f9187e6a8a04e3']);
+
+export function isExemptMerge(sha, treeOf) {
+  if (!PUBLISHED_MERGES.has(sha)) return false;
+  const tree = treeOf(sha);
+  return typeof tree === 'string' && tree !== '' && tree === treeOf(`${sha}^2`);
+}
+
 export function isAllowedRemote(url, env = process.env) {
   if (url === EXPECTED_REMOTE) return true;
   return env.GITHUB_ACTIONS === 'true' && ACTIONS_REMOTES.includes(url);
@@ -86,8 +98,9 @@ function main() {
       'log', '-1', '--format=%P%n%ae%n%ce%n%an%n%cn%n%B', sha,
     ]).split('\n');
     // History is linear: a merge commit's content is not shown by diff-tree, so reject it outright.
-    if (parents.split(' ').filter(Boolean).length > 1) fail(short, 'merge-commit');
-    if (!isEmailExempt(sha)) {
+    const exemptMerge = isExemptMerge(sha, (rev) => tryGit(['rev-parse', `${rev}^{tree}`]));
+    if (parents.split(' ').filter(Boolean).length > 1 && !exemptMerge) fail(short, 'merge-commit');
+    if (!isEmailExempt(sha) && !exemptMerge) {
       if (authorEmail !== REQUIRED_EMAIL) fail(short, 'author-email');
       if (committerEmail !== REQUIRED_EMAIL) fail(short, 'committer-email');
     }
