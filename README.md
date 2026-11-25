@@ -9,3 +9,8 @@ Privacy contract:
 - `sensitive-local`: repo-relative file paths and best-effort redacted free text, in a separate object, never exported in phase 1.
 
 Observations are the agent's self-report (external-observed), not verified evidence.
+
+## What's coming
+
+- **Grafana dashboards (planned, illustrative preview):** an opt-in NDJSON export that Grafana Alloy, Loki and
+  Grafana can consume. See [docs/preview/grafana.md](docs/preview/grafana.md) for screenshots from a prototype.
