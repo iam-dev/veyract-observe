@@ -151,24 +151,22 @@ function projectToolEvent(
 
   if (ctx.level === 'metadata') return { ok: true, capture };
 
-  const detail: { path?: string; command?: string } = {};
-  if (rel !== null && !UNSAFE_PATH_CHARS.test(rel)) detail.path = rel;
-  if (command !== undefined) {
-    const form = restrictedForm(command);
-    if (form !== null) detail.command = form;
-  }
-  if (detail.path !== undefined || detail.command !== undefined) capture.detail = detail;
+  const form = command === undefined ? null : restrictedForm(command);
+  if (form !== null) capture.detail = { command: form };
 
   if (ctx.level !== 'sensitive-local') return { ok: true, capture };
 
-  const sensitive = sensitiveDetail(spec, command, field);
+  const safeRel = rel !== null && !UNSAFE_PATH_CHARS.test(rel) ? rel : undefined;
+  const sensitive = sensitiveDetail(spec, safeRel, command, field);
   return sensitive === undefined ? { ok: true, capture } : { ok: true, capture, sensitive };
 }
 
 function sensitiveDetail(
-  spec: ToolFieldSpec, command: string | undefined, field: (key: string | undefined) => unknown,
+  spec: ToolFieldSpec, path: string | undefined, command: string | undefined,
+  field: (key: string | undefined) => unknown,
 ): SensitiveDetail | undefined {
   const out: SensitiveDetail = {};
+  if (path !== undefined) out.path = path;
   if (command !== undefined) out.command = redactAndTruncate(command, SENSITIVE_COMMAND_MAX);
   const todos = field(spec.todos);
   if (Array.isArray(todos)) {

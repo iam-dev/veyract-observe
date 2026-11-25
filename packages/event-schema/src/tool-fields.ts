@@ -4,7 +4,7 @@
  * `tool_input` key read at all. Keys marked sensitive-local are read only at that level.
  */
 export interface ToolFieldSpec {
-  /** Key holding the target path: path category at all levels, repo-relative path at `detailed`+. */
+  /** Key holding the target path: path category at all levels, repo-relative path at sensitive-local only (R2-01). */
   readonly path?: 'file_path' | 'notebook_path' | 'path';
   /** Bash command: category at all levels, restricted form at `detailed`+, redacted text at sensitive-local. */
   readonly command?: 'command';

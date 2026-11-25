@@ -89,17 +89,23 @@ describe('layer 2: residual-field accounting', () => {
     })),
   );
 
-  test('a planted file name appears at detailed only at capture.detail.path', () => {
+  test('a planted file name appears at sensitive-local only at sensitive.path (R2-01)', () => {
     for (const p of fileEvents) {
-      const r = okResult(p, 'detailed');
+      const r = okResult(p, 'sensitive-local');
       const hits = stringLeaves(r).filter(([, s]) => s.includes(NAME));
-      expect(hits.map(([path]) => path.join('.'))).toEqual(['capture.detail.path']);
-      expect(r.capture.detail?.path).toBe(`src/${NAME}.ts`);
+      expect(hits.map(([path]) => path.join('.'))).toEqual(['sensitive.path']);
+      expect(r.sensitive?.path).toBe(`src/${NAME}.ts`);
     }
   });
 
-  test('a planted file name appears nowhere at metadata', () => {
-    for (const p of fileEvents) expect(JSON.stringify(okResult(p, 'metadata'))).not.toContain(NAME);
+  test('a planted file name appears nowhere at metadata or detailed (R2-01)', () => {
+    for (const p of fileEvents) {
+      for (const level of ['metadata', 'detailed'] as const) {
+        const r = okResult(p, level);
+        expect(JSON.stringify(r), level).not.toContain(NAME);
+        expect(r.capture, level).not.toHaveProperty('detail');
+      }
+    }
   });
 
   const TOOL = 'PLANTEDTOOLNAME';
@@ -268,36 +274,41 @@ describe('behaviour', () => {
     expect(r.capture).not.toHaveProperty('detail');
   });
 
-  test('metadata has no detail; detailed has path and restricted form', () => {
+  test('metadata has no detail; detailed has the restricted form but no path; the path is sensitive-local', () => {
     expect(okResult(bash('git commit -m wip'), 'metadata').capture).not.toHaveProperty('detail');
     expect(okResult(bash('git commit -m wip'), 'detailed').capture.detail).toEqual({ command: 'git commit' });
     expect(okResult(bash('curl https://example.com/x'), 'detailed').capture).not.toHaveProperty('detail');
     expect(okResult(bash('curl https://example.com/x'), 'detailed').capture.commandCategory).toBe('network');
     const read = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: `${REPO_ROOT}/tests/a.test.ts` } };
-    expect(okResult(read, 'detailed').capture).toMatchObject({ pathCategory: 'test', detail: { path: 'tests/a.test.ts' } });
+    expect(okResult(read, 'detailed').capture.pathCategory).toBe('test');
+    expect(okResult(read, 'detailed')).not.toHaveProperty('capture.detail');
+    expect(okResult(read, 'detailed')).not.toHaveProperty('sensitive');
+    expect(okResult(read, 'sensitive-local').sensitive).toEqual({ path: 'tests/a.test.ts' });
     expect(okResult(read, 'metadata').capture).not.toHaveProperty('detail');
   });
 
   test('paths outside the repo keep only their category', () => {
     const p = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: '/tmp/synthetic/x.ts' } };
-    const r = okResult(p, 'detailed');
+    const r = okResult(p, 'sensitive-local');
     expect(r.capture.pathCategory).toBe('outside');
     expect(r.capture).not.toHaveProperty('detail');
-    const noRoot = projectHookPayload(p, { ...ctx('detailed'), repoRoot: null });
+    expect(r).not.toHaveProperty('sensitive');
+    const noRoot = projectHookPayload(p, { ...ctx('sensitive-local'), repoRoot: null });
     expect(noRoot.ok && noRoot.capture.pathCategory).toBe('outside');
+    expect(noRoot).not.toHaveProperty('sensitive');
   });
 
   test('path fields per tool: notebook_path, optional Glob path', () => {
     const nb = { ...base, hook_event_name: 'PreToolUse', tool_name: 'NotebookEdit', tool_input: { notebook_path: `${REPO_ROOT}/docs/n.ipynb`, file_path: `${REPO_ROOT}/src/x.ts` } };
-    expect(okResult(nb, 'detailed').capture).toMatchObject({ pathCategory: 'docs', detail: { path: 'docs/n.ipynb' } });
+    expect(okResult(nb, 'sensitive-local')).toMatchObject({ capture: { pathCategory: 'docs' }, sensitive: { path: 'docs/n.ipynb' } });
     const glob = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Glob', tool_input: { pattern: '**/*.ts' } };
     expect(okResult(glob, 'detailed').capture.pathCategory).toBe('none');
     expect(okResult(glob, 'detailed').capture).not.toHaveProperty('detail');
   });
 
-  test('a path with control characters is not kept as detail.path', () => {
+  test('a path with control characters is not kept as sensitive.path', () => {
     const p = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: `${REPO_ROOT}/src/a\nb.ts` } };
-    expect(okResult(p, 'detailed').capture).not.toHaveProperty('detail');
+    expect(okResult(p, 'sensitive-local')).not.toHaveProperty('sensitive');
   });
 
   const CUT = '…[truncated]';
@@ -329,8 +340,10 @@ describe('behaviour', () => {
   test('sensitive is absent at lower levels and when empty', () => {
     expect(okResult(bash('ls'), 'detailed')).not.toHaveProperty('sensitive');
     expect(okResult(bash('ls'), 'metadata')).not.toHaveProperty('sensitive');
+    const outside = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/elsewhere/a.ts' } };
+    expect(okResult(outside, 'sensitive-local')).not.toHaveProperty('sensitive');
     const read = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: `${REPO_ROOT}/a.ts` } };
-    expect(okResult(read, 'sensitive-local')).not.toHaveProperty('sensitive');
+    expect(okResult(read, 'sensitive-local').sensitive).toEqual({ path: 'a.ts' });
     const badTodos = { ...base, hook_event_name: 'PreToolUse', tool_name: 'TodoWrite', tool_input: { todos: [null, 3, { status: 'pending' }] } };
     expect(okResult(badTodos, 'sensitive-local')).not.toHaveProperty('sensitive');
   });
@@ -351,23 +364,24 @@ describe('behaviour', () => {
     expect(notAgentTool.capture).not.toHaveProperty('subagentType');
   });
 
-  test("repoRoot '/' (or another root without a segment) never yields detail.path", () => {
+  test("repoRoot '/' (or another root without a segment) never yields a path", () => {
     for (const repoRoot of ['/', '//', '/./']) {
       for (const level of ['detailed', 'sensitive-local'] as const) {
         const r = projectHookPayload({ ...base, hook_event_name: 'PreToolUse', tool_name: 'Read',
           tool_input: { file_path: '/srv/data/secret.txt' } }, { ...ctx(level), repoRoot });
         expect(r.ok && r.capture.pathCategory).toBe('outside');
         expect(r.ok && r.capture).not.toHaveProperty('detail');
+        expect(r).not.toHaveProperty('sensitive');
         expect(JSON.stringify(r)).not.toContain('secret');
       }
     }
   });
 
-  test('paths with C1, separator or bidi control characters are not kept as detail.path', () => {
+  test('paths with C1, separator or bidi control characters are not kept as sensitive.path', () => {
     for (const ch of ['\u202e', '\u0085', '\u009b', '\u2028', '\u2029', '\u200e', '\u200f', '\u202a', '\u2066', '\u2069']) {
       const p = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: `${REPO_ROOT}/src/a${ch}st.ts` } };
-      const r = okResult(p, 'detailed');
-      expect(r.capture, JSON.stringify(ch)).not.toHaveProperty('detail');
+      const r = okResult(p, 'sensitive-local');
+      expect(r, JSON.stringify(ch)).not.toHaveProperty('sensitive');
       expect(r.capture.pathCategory).toBe('source');
     }
   });
