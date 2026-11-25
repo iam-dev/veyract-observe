@@ -195,7 +195,11 @@ importers:
         specifier: 5.1.1
         version: 5.1.1(@types/node@26.6.10)(vite@8.3.8(@types/node@26.6.10))
 
-  packages/event-schema: {}
+  packages/event-schema:
+    dependencies:
+      '@veyract/redaction':
+        specifier: workspace:*
+        version: link:../redaction
 
   packages/redaction: {}
 
