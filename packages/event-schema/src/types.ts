@@ -1,6 +1,15 @@
 import type { SessionSource, SessionEndReason, TodoStatus } from './allowlists.js';
 
-export type DetailLevel = 'metadata' | 'detailed' | 'sensitive-local';
+export const DETAIL_LEVELS = Object.freeze(['metadata', 'detailed', 'sensitive-local'] as const);
+export type DetailLevel = typeof DETAIL_LEVELS[number];
+
+/**
+ * Runtime check for a caller-supplied level. The level selects how much is kept, so an unknown value
+ * (a typo, a config string) must fail closed: projection rejects instead of guessing a level.
+ */
+export function isDetailLevel(v: unknown): v is DetailLevel {
+  return typeof v === 'string' && (DETAIL_LEVELS as readonly string[]).includes(v);
+}
 
 /** Supported hook events and the event type each projects to: the single source for both unions. */
 export const HOOK_EVENT_TYPES = Object.freeze({

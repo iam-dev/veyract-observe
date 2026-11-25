@@ -18,15 +18,22 @@ export const sessionSource = bucket(SOURCES);
 export const sessionEndReason = bucket(END_REASONS);
 export const todoStatus = bucket(TODO_STATUSES);
 
-export const BUILTIN_TOOLS: ReadonlySet<string> = new Set([
+/**
+ * The allowlists are exported as frozen arrays for reference only. Classification uses private Sets, so a
+ * consumer cannot widen what is kept (a ReadonlySet type does not stop `Set.prototype.add` at runtime).
+ */
+export const BUILTIN_TOOLS: readonly string[] = Object.freeze([
   'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'BashOutput', 'KillShell', 'Glob', 'Grep', 'LS',
   'WebFetch', 'WebSearch', 'TodoWrite', 'Task', 'Agent', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet',
   'ExitPlanMode', 'AskUserQuestion', 'Skill', 'SlashCommand', 'ToolSearch',
 ]);
 
-export const KNOWN_AGENT_TYPES: ReadonlySet<string> = new Set([
+export const KNOWN_AGENT_TYPES: readonly string[] = Object.freeze([
   'general-purpose', 'Explore', 'Plan', 'statusline-setup', 'claude-code-guide',
 ]);
+
+const TOOL_SET: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
+const AGENT_TYPE_SET: ReadonlySet<string> = new Set(KNOWN_AGENT_TYPES);
 
 const NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
@@ -41,9 +48,9 @@ function classify(
 
 /** Non-strings and malformed names yield undefined. */
 export function classifyTool(raw: unknown, level: DetailLevel, hash: HashFn): Named | undefined {
-  return classify(raw, level, hash, 'tool', BUILTIN_TOOLS, (r) => (r.startsWith('mcp__') ? 'mcp' : 'other'));
+  return classify(raw, level, hash, 'tool', TOOL_SET, (r) => (r.startsWith('mcp__') ? 'mcp' : 'other'));
 }
 
 export function classifyAgentType(raw: unknown, level: DetailLevel, hash: HashFn): Named | undefined {
-  return classify(raw, level, hash, 'agent-type', KNOWN_AGENT_TYPES, () => 'other');
+  return classify(raw, level, hash, 'agent-type', AGENT_TYPE_SET, () => 'other');
 }

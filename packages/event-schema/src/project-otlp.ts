@@ -15,7 +15,7 @@
  */
 import { nanosToMs, parseNanos, parseValue, scaleHalfUp } from './otlp-numbers.js';
 import { isRecord, items, own, ownArray } from './own.js';
-import type { DetailLevel, HashFn, Named } from './types.js';
+import { isDetailLevel, type DetailLevel, type HashFn, type Named } from './types.js';
 import * as validate from './validate.js';
 
 /**
@@ -88,7 +88,12 @@ const INSTRUMENTS: ReadonlyMap<string, InstrumentSpec> = new Map<Instrument, Ins
   }],
 ]);
 
-const CLAUDE_MODEL = /^claude-[a-z0-9.-]{1,48}$/;
+/**
+ * Model names kept readable at `metadata`: a known Claude family plus numeric version parts and an optional
+ * 8-digit date (`claude-opus-5-5`, `claude-haiku-5-5-20261101`). Only digits vary, so no free text survives.
+ * Anything else, including `claude-<anything>`, is `other` plus a pseudonym at `metadata`.
+ */
+const CLAUDE_MODEL = /^claude-(?:opus|sonnet|haiku|fable)-\d{1,3}(?:-\d{1,3}){0,2}(?:-\d{8})?$/;
 const READABLE_MODEL = /^[A-Za-z0-9._:-]{1,64}$/;
 
 /** Bounds on attribute structures, which feed the stream key (loopback input is untrusted). */
@@ -205,7 +210,7 @@ function metricHeader(metric: object): MetricHeader | null {
 type PointOutcome = UsageSample | 'rejected' | 'no-value';
 
 function projectPoint(
-  point: unknown, header: MetricHeader, resource: Json, scope: Json, ctx: OtlpProjectionContext,
+  point: unknown, header: MetricHeader, resourceKey: string, scopeKey: string, ctx: OtlpProjectionContext,
 ): PointOutcome {
   if (!isRecord(point)) return 'rejected';
   const flags = own(point, 'flags');
@@ -230,10 +235,7 @@ function projectPoint(
 
   const attrs = attributeMap(own(point, 'attributes'));
   // Stream key over everything, BEFORE any attribute is dropped. The canonical string is never kept.
-  const streamKey = ctx.hash('stream', canonicalJSON({
-    resource, scope, instrument: header.instrument, unit: header.unit,
-    temporality: header.temporality === 'delta' ? 1 : 2, monotonic: header.monotonic, pointAttributes: mapToJson(attrs),
-  }));
+  const streamKey = ctx.hash('stream', streamIdentity(header, resourceKey, scopeKey, attrs));
 
   const attributes: UsageSample['attributes'] = {};
   const model = stringAttr(attrs, 'model');
@@ -260,25 +262,40 @@ function projectPoint(
   };
 }
 
-function scopeIdentity(raw: unknown): Json {
-  if (raw === undefined) return { name: null, version: null };
+/**
+ * canonicalJSON({ instrument, monotonic, pointAttributes, resource, scope, temporality, unit }), written out in
+ * sorted key order. Resource and scope arrive already canonical: they are serialized once per parent node,
+ * not once per data point, so a large resource cannot multiply the work by the number of points.
+ */
+function streamIdentity(header: MetricHeader, resourceKey: string, scopeKey: string, attrs: Map<string, Json>): string {
+  return `{"instrument":${JSON.stringify(header.instrument)},"monotonic":${header.monotonic},`
+    + `"pointAttributes":${canonicalJSON(mapToJson(attrs))},"resource":${resourceKey},"scope":${scopeKey},`
+    + `"temporality":${header.temporality === 'delta' ? 1 : 2},"unit":${JSON.stringify(header.unit)}}`;
+}
+
+/** The scope identity as canonical JSON. */
+function scopeIdentity(raw: unknown): string {
+  if (raw === undefined) return canonicalJSON({ name: null, version: null });
   if (!isRecord(raw)) throw new Malformed();
   const name = own(raw, 'name');
   const version = own(raw, 'version');
   if ((name !== undefined && typeof name !== 'string') || (version !== undefined && typeof version !== 'string')) {
     throw new Malformed();
   }
-  return { name: name ?? null, version: version ?? null };
+  return canonicalJSON({ name: name ?? null, version: version ?? null });
 }
 
-function resourceIdentity(raw: unknown): Json {
-  if (raw === undefined) return {};
+/** The resource identity (all resource attributes) as canonical JSON. */
+function resourceIdentity(raw: unknown): string {
+  if (raw === undefined) return canonicalJSON({});
   if (!isRecord(raw)) throw new Malformed();
-  return mapToJson(attributeMap(own(raw, 'attributes')));
+  return canonicalJSON(mapToJson(attributeMap(own(raw, 'attributes'))));
 }
 
 export function projectOtlpMetrics(body: unknown, ctx: OtlpProjectionContext): OtlpMetricsResult {
   const result: OtlpMetricsResult = { samples: [], rejected: 0, noValue: 0 };
+  // Fail closed on an unusable context: an unknown level must never widen what is kept.
+  if (!isRecord(ctx) || !isDetailLevel(ctx.level) || typeof ctx.hash !== 'function') { result.rejected++; return result; }
   try {
     if (!isRecord(body)) { result.rejected++; return result; }
     const rms = ownArray(body, 'resourceMetrics');
@@ -295,7 +312,7 @@ function projectResourceMetrics(rm: unknown, ctx: OtlpProjectionContext, result:
   if (!isRecord(rm)) { result.rejected++; return; }
   const sms = ownArray(rm, 'scopeMetrics');
   if (sms === null) { result.rejected++; return; }
-  let resource: Json;
+  let resource: string;
   try {
     resource = resourceIdentity(own(rm, 'resource'));
   } catch {
@@ -312,7 +329,7 @@ function projectResourceMetrics(rm: unknown, ctx: OtlpProjectionContext, result:
     if (!isRecord(sm)) { result.rejected++; continue; }
     const ms = ownArray(sm, 'metrics');
     if (ms === null) { result.rejected++; continue; }
-    let scope: Json;
+    let scope: string;
     try {
       scope = scopeIdentity(own(sm, 'scope'));
     } catch {
@@ -329,7 +346,7 @@ function rejectMetrics(ms: readonly unknown[], result: OtlpMetricsResult): void 
   for (const m of items(ms)) result.rejected += countPoints(m);
 }
 
-function projectMetric(metric: unknown, resource: Json, scope: Json, ctx: OtlpProjectionContext, result: OtlpMetricsResult): void {
+function projectMetric(metric: unknown, resource: string, scope: string, ctx: OtlpProjectionContext, result: OtlpMetricsResult): void {
   if (!isRecord(metric)) { result.rejected++; return; }
   const header = metricHeader(metric);
   if (header === null) { result.rejected += countPoints(metric); return; }
