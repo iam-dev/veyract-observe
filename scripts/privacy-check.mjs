@@ -2,7 +2,7 @@
 // Privacy check: flags personal/local identifiers. Prints "file:line rule" only,
 // never the matched text.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -97,4 +97,13 @@ function main() {
   console.log('privacy-check: ok');
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();
+/** True when the module at `moduleUrl` is the script node was started with (symlinks resolved). */
+export function isMain(moduleUrl) {
+  try {
+    return realpathSync(process.argv[1] ?? '') === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain(import.meta.url)) main();
