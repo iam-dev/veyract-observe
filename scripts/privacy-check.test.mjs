@@ -239,3 +239,13 @@ test('resolveRange: empty, all-zero or unknown base means the whole history of h
   expect(resolveRange('', known)).toBe('HEAD');
   expect(resolveRange('abc...def', known)).toBe('abc...def');
 });
+
+test('publication gate checks the configured origin URL, not an insteadOf rewrite of it', () => {
+  const dir = makeRepo();
+  commit(dir, 'a.txt', 'clean\n', 'chore: base');
+  commit(dir, 'b.txt', 'clean\n', 'chore: other');
+  git(dir, ['config', 'url.https://github.com/.insteadOf', 'git@github.com:']);
+  expect(runGate(dir)).toBe(0);
+  git(dir, ['remote', 'set-url', 'origin', 'git@github.com:someone-else/repo.git']);
+  expect(runGate(dir)).toBe(1);
+});

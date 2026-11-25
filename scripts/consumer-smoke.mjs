@@ -14,6 +14,7 @@ const EXPECTED = {
   '@veyract/redaction': { redact: 'function', truncate: 'function', redactAndTruncate: 'function', MAX_REDACT_INPUT: 'number' },
   '@veyract/event-schema': {
     projectHookPayload: 'function',
+    HOOK_EVENT_TYPES: 'object',
     recognizeTaskTag: 'function',
     projectOtlpMetrics: 'function',
     projectOtlpLogs: 'function',

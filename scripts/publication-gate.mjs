@@ -6,10 +6,8 @@
 //
 // Options:
 //   --range <rev-range>   commits to check (default: upstream..HEAD)
-//   --remote-url <url>    URL being pushed to (default: `git remote get-url origin`)
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { findViolations, git, loadDenyList } from './privacy-check.mjs';
+//   --remote-url <url>    URL being pushed to (default: configured remote.origin.url)
+import { findViolations, git, isMain, loadDenyList } from './privacy-check.mjs';
 
 const REQUIRED_EMAIL = '30754770+iam-dev@users.noreply.github.com';
 const EXPECTED_REMOTE = 'git@github.com:iam-dev/veyract-observe.git';
@@ -76,7 +74,8 @@ function main() {
     failures++;
   };
 
-  const remote = option('--remote-url') ?? tryGit(['remote', 'get-url', 'origin']);
+  // The configured URL, not `remote get-url`: that applies url.*.insteadOf rewrites (e.g. ssh → https).
+  const remote = option('--remote-url') ?? tryGit(['config', '--get', 'remote.origin.url']);
   if (!isAllowedRemote(remote)) fail('remote', 'wrong-remote');
 
   const deny = loadDenyList();
@@ -116,11 +115,4 @@ function main() {
   console.log(`publication-gate: ok (${shas.length} commit(s) checked)`);
 }
 
-const invokedDirectly = (() => {
-  try {
-    return realpathSync(process.argv[1] ?? '') === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-})();
-if (invokedDirectly) main();
+if (isMain(import.meta.url)) main();
