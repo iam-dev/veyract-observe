@@ -5,3 +5,4 @@ export * from './paths.js';
 export * from './commands.js';
 export * from './tool-fields.js';
 export * from './project-hook.js';
+export * from './task-tag.js';
