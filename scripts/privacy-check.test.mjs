@@ -1,5 +1,5 @@
 import { findViolations } from './privacy-check.mjs';
-import { isEmailExempt, isAllowedRemote, isExemptMerge, resolveRange } from './publication-gate.mjs';
+import { isEmailExempt, isAllowedRemote, isExemptMerge, isMedia, loadReviewedMedia, resolveRange } from './publication-gate.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -258,4 +258,43 @@ test('merge exemption: listed full SHA only, and only when the merge tree equals
   expect(isExemptMerge('f'.repeat(40), same)).toBe(false);
   expect(isExemptMerge(MERGE, (rev) => (rev.endsWith('^2') ? 'tree-b' : 'tree-a'))).toBe(false);
   expect(isExemptMerge(MERGE, () => null)).toBe(false);
+});
+
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+
+test('isMedia detects images, PDFs and video by extension or magic bytes', () => {
+  expect(isMedia('docs/a.png', Buffer.from('x'))).toBe(true);
+  expect(isMedia('docs/a.SVG', Buffer.from('<svg/>'))).toBe(true);
+  expect(isMedia('docs/a.pdf', null)).toBe(true);
+  expect(isMedia('docs/renamed.txt', PNG_BYTES)).toBe(true);
+  expect(isMedia('x.bin', Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe(true);
+  expect(isMedia('x.bin', Buffer.from('RIFF\0\0\0\0WEBPVP8 ', 'latin1'))).toBe(true);
+  expect(isMedia('x.bin', Buffer.from('\0\0\0\x18ftypmp42', 'latin1'))).toBe(true);
+  expect(isMedia('README.md', Buffer.from('# hello'))).toBe(false);
+  expect(isMedia('empty', Buffer.alloc(0))).toBe(false);
+});
+
+test('loadReviewedMedia reads full blob ids, ignores comments and junk', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vo-media-'));
+  dirs.push(dir);
+  const file = join(dir, 'reviewed-media.txt');
+  const id = 'a'.repeat(40);
+  writeFileSync(file, `# header\n${id}  docs/x.png  # ok\nabc docs/short.png\n\n`);
+  expect([...loadReviewedMedia(file)]).toEqual([id]);
+  expect(loadReviewedMedia(join(dir, 'missing.txt')).size).toBe(0);
+});
+
+test('gate refuses an unreviewed image, also when renamed', () => {
+  const dir = makeRepo();
+  commit(dir, 'README.md', 'hello\n');
+  commit(dir, 'shot.png', PNG_BYTES);
+  expect(runGate(dir)).toBe(1);
+  const renamed = makeRepo();
+  commit(renamed, 'README.md', 'hello\n');
+  commit(renamed, 'notes.dat', PNG_BYTES);
+  expect(runGate(renamed)).toBe(1);
+});
+
+test('the shipped reviewed-media list approves nothing', () => {
+  expect(loadReviewedMedia().size).toBe(0);
 });

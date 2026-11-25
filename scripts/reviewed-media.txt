@@ -1,0 +1,6 @@
+# Media files the owner has looked at and approved for publication.
+# The publication gate refuses every image, PDF or video whose git blob id is not listed here,
+# because text drawn inside pixels is invisible to the pattern checks.
+# Before adding a line: open the file, check it shows no real session data, usernames, paths,
+# hostnames, ids, costs or MCP server names, and that illustrative output is labelled inside the image.
+# Format: <git blob id (git rev-parse HEAD:<path>)>  <path>  # reason

@@ -7,6 +7,9 @@
 // Options:
 //   --range <rev-range>   commits to check (default: upstream..HEAD)
 //   --remote-url <url>    URL being pushed to (default: configured remote.origin.url)
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { findViolations, git, isMain, loadDenyList } from './privacy-check.mjs';
 
 const REQUIRED_EMAIL = '30754770+iam-dev@users.noreply.github.com';
@@ -37,6 +40,43 @@ export function isExemptMerge(sha, treeOf) {
 export function isAllowedRemote(url, env = process.env) {
   if (url === EXPECTED_REMOTE) return true;
   return env.GITHUB_ACTIONS === 'true' && ACTIONS_REMOTES.includes(url);
+}
+
+// Text drawn inside pixels (screenshots, PDFs) is invisible to the pattern checks. Every media blob is
+// therefore refused unless the owner has looked at that exact content and listed its git blob id in
+// scripts/reviewed-media.txt ("<blob id> <path> # why"). Detected by extension and by magic bytes, so a
+// renamed file is caught too.
+const MEDIA_EXT = /\.(png|jpe?g|gif|webp|avif|heic|heif|bmp|ico|tiff?|svg|pdf|mp4|mov|webm|mkv)$/i;
+const MAGIC = [
+  [0x89, 0x50, 0x4e, 0x47], // PNG
+  [0xff, 0xd8, 0xff], // JPEG
+  [0x47, 0x49, 0x46, 0x38], // GIF
+  [0x25, 0x50, 0x44, 0x46], // %PDF
+  [0x49, 0x49, 0x2a, 0x00], // TIFF (LE)
+  [0x4d, 0x4d, 0x00, 0x2a], // TIFF (BE)
+  [0x42, 0x4d], // BMP
+];
+
+export function isMedia(path, blob) {
+  if (MEDIA_EXT.test(path)) return true;
+  if (!blob || blob.length < 4) return false;
+  if (MAGIC.some((m) => m.every((b, i) => blob[i] === b))) return true;
+  const ascii = (from, to) => blob.subarray(from, to).toString('latin1');
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return true; // WebP
+  if (ascii(4, 8) === 'ftyp') return true; // MP4 / MOV / AVIF / HEIC
+  return false;
+}
+
+const REVIEWED_MEDIA = join(dirname(fileURLToPath(import.meta.url)), 'reviewed-media.txt');
+
+export function loadReviewedMedia(file = REVIEWED_MEDIA) {
+  if (!existsSync(file)) return new Set();
+  return new Set(
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .map((l) => l.replace(/#.*/, '').trim().split(/\s+/)[0])
+      .filter((id) => /^[0-9a-f]{40}$/.test(id)),
+  );
 }
 
 function tryGit(args) {
@@ -91,6 +131,7 @@ function main() {
   if (!isAllowedRemote(remote)) fail('remote', 'wrong-remote');
 
   const deny = loadDenyList();
+  const reviewedMedia = loadReviewedMedia();
   const shas = git(['rev-list', '--reverse', range]).split('\n').filter(Boolean);
   for (const sha of shas) {
     const short = sha.slice(0, 10);
@@ -116,6 +157,10 @@ function main() {
         blob = git(['show', `${sha}:${path}`], { encoding: 'buffer', quiet: true });
       } catch {
         continue; // deleted in this commit: the path was scanned above
+      }
+      if (isMedia(path, blob)) {
+        const id = tryGit(['rev-parse', `${sha}:${path}`]);
+        if (!id || !reviewedMedia.has(id)) fail(short, 'media-unreviewed');
       }
       // latin1 keeps ASCII patterns intact in binary blobs too.
       for (const v of findViolations(blob.toString('latin1'), deny)) fail(short, `${v.rule} (content)`);
