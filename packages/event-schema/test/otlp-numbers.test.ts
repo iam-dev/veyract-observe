@@ -1,4 +1,5 @@
-import { parseNanos, nanosToMs, parseValue, scaleHalfUp } from '../src/index.js';
+import { parseNanos, nanosToMs, parseValue } from '../src/index.js';
+import { scaleHalfUp } from '../src/otlp-numbers.js'; // internal helper, not part of the public API
 
 describe('parseNanos', () => {
   test('19-digit nanosecond strings parse exactly', () => {

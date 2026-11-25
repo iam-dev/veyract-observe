@@ -7,10 +7,9 @@
 // Options:
 //   --range <rev-range>   commits to check (default: upstream..HEAD)
 //   --remote-url <url>    URL being pushed to (default: `git remote get-url origin`)
-import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { findViolations, loadDenyList } from './privacy-check.mjs';
+import { findViolations, git, loadDenyList } from './privacy-check.mjs';
 
 const REQUIRED_EMAIL = '30754770+iam-dev@users.noreply.github.com';
 const EXPECTED_REMOTE = 'git@github.com:iam-dev/veyract-observe.git';
@@ -30,13 +29,9 @@ export function isAllowedRemote(url, env = process.env) {
   return env.GITHUB_ACTIONS === 'true' && ACTIONS_REMOTES.includes(url);
 }
 
-function git(args) {
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-}
-
 function tryGit(args) {
   try {
-    return git(args).trim();
+    return git(args, { quiet: true }).trim();
   } catch {
     return null;
   }
@@ -60,12 +55,21 @@ function option(name) {
   return value;
 }
 
+/**
+ * `base..head` with a base that is empty, all-zero (new branch) or not a known commit (e.g. a force-pushed
+ * CI "before") means the whole history of head. Callers pass the raw values; this is the only place that
+ * resolves them.
+ */
+export function resolveRange(range, isCommit) {
+  const i = range.indexOf('..');
+  if (i === -1 || range.includes('...')) return range || 'HEAD';
+  const base = range.slice(0, i);
+  const head = range.slice(i + 2) || 'HEAD';
+  return base === '' || /^0+$/.test(base) || !isCommit(base) ? head : `${base}..${head}`;
+}
+
 function main() {
-  let range = option('--range') ?? defaultRange();
-  if (!range) {
-    console.error('publication-gate: --range needs a value');
-    process.exit(2);
-  }
+  const range = resolveRange(option('--range') ?? defaultRange(), (rev) => tryGit(['cat-file', '-e', `${rev}^{commit}`]) !== null);
   let failures = 0;
   const fail = (what, rule) => {
     console.error(`${what} ${rule}`);
@@ -75,9 +79,6 @@ function main() {
   const remote = option('--remote-url') ?? tryGit(['remote', 'get-url', 'origin']);
   if (!isAllowedRemote(remote)) fail('remote', 'wrong-remote');
 
-  // An all-zero base (new branch) means the whole history.
-  range = range.replace(/^0{40,64}\.\./, '');
-  if (range === '' || range.startsWith('..')) range = 'HEAD';
   const deny = loadDenyList();
   const shas = git(['rev-list', '--reverse', range]).split('\n').filter(Boolean);
   for (const sha of shas) {
@@ -100,7 +101,7 @@ function main() {
       for (const v of findViolations(path, deny)) fail(short, `${v.rule} (path)`);
       let blob;
       try {
-        blob = execFileSync('git', ['show', `${sha}:${path}`], { maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+        blob = git(['show', `${sha}:${path}`], { encoding: 'buffer', quiet: true });
       } catch {
         continue; // deleted in this commit: the path was scanned above
       }

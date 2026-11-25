@@ -7,13 +7,15 @@
  * is copied or spread from the input. Only own data properties are read (no inherited keys, no getters).
  * The input is expected to be JSON.parse output; projection does not throw on any such value.
  */
-import { redact, truncate } from '@veyract/redaction';
+import { redactAndTruncate } from '@veyract/redaction';
 import { classifyAgentType, classifyTool, sessionEndReason, sessionSource, todoStatus } from './allowlists.js';
 import { commandCategory, restrictedForm } from './commands.js';
-import { pathCategory, relativePath } from './paths.js';
+import { own, isRecord } from './own.js';
+import { categoryOfRelative, relativePath } from './paths.js';
 import { TOOL_FIELDS, type ToolFieldSpec } from './tool-fields.js';
-import type {
-  DetailLevel, EventType, HashFn, HookEventName, Named, ProjectedCapture, SensitiveDetail,
+import {
+  HOOK_EVENT_TYPES, type DetailLevel, type EventType, type HashFn, type HookEventName, type ProjectedCapture,
+  type SensitiveDetail,
 } from './types.js';
 import * as validate from './validate.js';
 
@@ -39,35 +41,17 @@ const TODO_MAX_SCAN = 1_000;
 /** C0/C1 controls, line/paragraph separators and bidi controls: never kept in a readable path. */
 const UNSAFE_PATH_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
-const EVENT_TYPES: ReadonlyMap<string, EventType> = new Map<HookEventName, EventType>([
-  ['SessionStart', 'session.started'],
-  ['SessionEnd', 'session.ended'],
-  ['UserPromptSubmit', 'prompt.submitted'],
-  ['PreToolUse', 'tool.requested'],
-  ['PostToolUse', 'tool.completed'],
-  ['PostToolUseFailure', 'tool.failed'],
-  ['PermissionRequest', 'permission.requested'],
-  ['SubagentStart', 'subagent.started'],
-  ['SubagentStop', 'subagent.stopped'],
-  ['Stop', 'agent.stopped'],
-]);
-
-type Obj = object;
-
-function isRecord(v: unknown): v is Obj {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-/** Own data property only: inherited keys and accessors are never read (no getter is invoked). */
-function own(obj: Obj, key: string): unknown {
-  const d = Object.getOwnPropertyDescriptor(obj, key);
-  return d !== undefined && 'value' in d ? d.value : undefined;
-}
+/** A Map, not an object lookup: an inherited key such as 'constructor' must never match. */
+const EVENT_TYPES: ReadonlyMap<string, EventType> = new Map(Object.entries(HOOK_EVENT_TYPES));
 
 const reject = (reason: RejectReason): ProjectionResult => ({ ok: false, reason });
 
-function classifyAgent(raw: unknown, ctx: ProjectionContext): Named | undefined {
-  return typeof raw === 'string' ? classifyAgentType(raw, ctx.level, ctx.hash) : undefined;
+/** The CALLING agent (top-level `agent_id` / `agent_type`); absent on main-thread calls. */
+function addCallerAgent(raw: object, capture: ProjectedCapture, ctx: ProjectionContext): void {
+  const agentId = validate.agentId(own(raw, 'agent_id'));
+  if (agentId !== undefined) capture.agentId = agentId;
+  const agentType = classifyAgentType(own(raw, 'agent_type'), ctx.level, ctx.hash);
+  if (agentType !== undefined) capture.agentType = agentType;
 }
 
 export function projectHookPayload(raw: unknown, ctx: ProjectionContext): ProjectionResult {
@@ -108,20 +92,15 @@ export function projectHookPayload(raw: unknown, ctx: ProjectionContext): Projec
     case 'PostToolUseFailure':
       return projectToolEvent(raw, hookEvent, capture, ctx);
     case 'PermissionRequest': {
-      const toolRaw = own(raw, 'tool_name');
-      const tool = typeof toolRaw === 'string' ? classifyTool(toolRaw, ctx.level, ctx.hash) : undefined;
+      const tool = classifyTool(own(raw, 'tool_name'), ctx.level, ctx.hash);
       if (tool === undefined) return reject('invalid-field');
       capture.tool = tool;
       break;
     }
     case 'SubagentStart':
-    case 'SubagentStop': {
-      const agentId = validate.agentId(own(raw, 'agent_id'));
-      if (agentId !== undefined) capture.agentId = agentId;
-      const agentType = classifyAgent(own(raw, 'agent_type'), ctx);
-      if (agentType !== undefined) capture.agentType = agentType;
+    case 'SubagentStop':
+      addCallerAgent(raw, capture, ctx);
       break;
-    }
     case 'Stop':
       break;
   }
@@ -129,10 +108,9 @@ export function projectHookPayload(raw: unknown, ctx: ProjectionContext): Projec
 }
 
 function projectToolEvent(
-  raw: Obj, hookEvent: HookEventName, capture: ProjectedCapture, ctx: ProjectionContext,
+  raw: object, hookEvent: HookEventName, capture: ProjectedCapture, ctx: ProjectionContext,
 ): ProjectionResult {
   const toolRaw = own(raw, 'tool_name');
-  if (typeof toolRaw !== 'string') return reject('invalid-field');
   const tool = classifyTool(toolRaw, ctx.level, ctx.hash);
   if (tool === undefined) return reject('invalid-field');
   capture.tool = tool;
@@ -148,27 +126,25 @@ function projectToolEvent(
       if (typeof isInterrupt === 'boolean') capture.isInterrupt = isInterrupt;
     }
   }
-  const agentId = validate.agentId(own(raw, 'agent_id'));
-  if (agentId !== undefined) capture.agentId = agentId;
+  addCallerAgent(raw, capture, ctx);
 
-  // Only built-in tools listed in TOOL_FIELDS have any tool_input key read.
-  const spec: ToolFieldSpec | undefined = TOOL_FIELDS.get(toolRaw);
+  // Only built-in tools listed in TOOL_FIELDS have any tool_input key read (classifyTool proved a string).
+  const spec: ToolFieldSpec | undefined = TOOL_FIELDS.get(toolRaw as string);
   const inputRaw = spec !== undefined ? own(raw, 'tool_input') : undefined;
   const input = isRecord(inputRaw) ? inputRaw : undefined;
   const field = (key: string | undefined): unknown => (input !== undefined && key !== undefined ? own(input, key) : undefined);
 
   // agentId / agentType always describe the caller; Task / Agent add the requested type separately.
-  const agentType = classifyAgent(own(raw, 'agent_type'), ctx);
-  if (agentType !== undefined) capture.agentType = agentType;
   if (spec?.subagentType !== undefined) {
-    const subagentType = classifyAgent(field(spec.subagentType), ctx);
+    const subagentType = classifyAgentType(field(spec.subagentType), ctx.level, ctx.hash);
     if (subagentType !== undefined) capture.subagentType = subagentType;
   }
   if (spec === undefined) return { ok: true, capture };
 
   const pathRaw = field(spec.path);
   const path = typeof pathRaw === 'string' ? pathRaw : undefined;
-  if (spec.path !== undefined) capture.pathCategory = pathCategory(path, ctx.repoRoot);
+  const rel = path === undefined ? null : relativePath(path, ctx.repoRoot);
+  if (spec.path !== undefined) capture.pathCategory = path === undefined ? 'none' : categoryOfRelative(rel);
   const commandRaw = field(spec.command);
   const command = typeof commandRaw === 'string' ? commandRaw : undefined;
   if (command !== undefined) capture.commandCategory = commandCategory(command);
@@ -176,10 +152,7 @@ function projectToolEvent(
   if (ctx.level === 'metadata') return { ok: true, capture };
 
   const detail: { path?: string; command?: string } = {};
-  if (path !== undefined) {
-    const rel = relativePath(path, ctx.repoRoot);
-    if (rel !== null && !UNSAFE_PATH_CHARS.test(rel)) detail.path = rel;
-  }
+  if (rel !== null && !UNSAFE_PATH_CHARS.test(rel)) detail.path = rel;
   if (command !== undefined) {
     const form = restrictedForm(command);
     if (form !== null) detail.command = form;
@@ -196,33 +169,25 @@ function sensitiveDetail(
   spec: ToolFieldSpec, command: string | undefined, field: (key: string | undefined) => unknown,
 ): SensitiveDetail | undefined {
   const out: SensitiveDetail = {};
-  let any = false;
-  if (command !== undefined) {
-    out.command = truncate(redact(command).text, SENSITIVE_COMMAND_MAX);
-    any = true;
-  }
+  if (command !== undefined) out.command = redactAndTruncate(command, SENSITIVE_COMMAND_MAX);
   const todos = field(spec.todos);
   if (Array.isArray(todos)) {
-    const subjects: Array<{ subject: string; status: NonNullable<ReturnType<typeof todoStatus>> }> = [];
+    const subjects: NonNullable<SensitiveDetail['todoSubjects']> = [];
     for (let i = 0; i < todos.length && i < TODO_MAX_SCAN && subjects.length < TODO_MAX_ITEMS; i++) {
       const item = own(todos, String(i));
       if (!isRecord(item)) continue;
       const content = own(item, 'content');
       if (typeof content !== 'string') continue;
       subjects.push({
-        subject: truncate(redact(content).text, TODO_SUBJECT_MAX),
+        subject: redactAndTruncate(content, TODO_SUBJECT_MAX),
         status: todoStatus(own(item, 'status')) ?? 'other',
       });
     }
-    if (subjects.length > 0) {
-      out.todoSubjects = subjects;
-      any = true;
-    }
+    if (subjects.length > 0) out.todoSubjects = subjects;
   }
   const description = field(spec.description);
   if (typeof description === 'string') {
-    out.subagentDescription = truncate(redact(description).text, SUBAGENT_DESCRIPTION_MAX);
-    any = true;
+    out.subagentDescription = redactAndTruncate(description, SUBAGENT_DESCRIPTION_MAX);
   }
-  return any ? out : undefined;
+  return Object.keys(out).length > 0 ? out : undefined;
 }

@@ -1,5 +1,5 @@
 import { findViolations } from './privacy-check.mjs';
-import { isEmailExempt, isAllowedRemote } from './publication-gate.mjs';
+import { isEmailExempt, isAllowedRemote, resolveRange } from './publication-gate.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -226,4 +226,16 @@ test('pre-push hook scans exactly the pushed range against the pushed URL', () =
   commit(dir, 'b.txt', '++' + homePath + '\n', 'chore: new leak');
   expect(runPrePush(dir, line(head(dir), clean))).toBe(1);
   expect(runPrePush(dir, `${line(clean, old)}\n${line(head(dir), clean)}`)).toBe(1); // any failing ref fails the push
+});
+
+test('resolveRange: empty, all-zero or unknown base means the whole history of head', () => {
+  const known = (rev) => rev === 'abc';
+  expect(resolveRange(`${ZERO}..def`, known)).toBe('def');
+  expect(resolveRange('..def', known)).toBe('def');
+  expect(resolveRange('gone..def', known)).toBe('def');
+  expect(resolveRange('abc..def', known)).toBe('abc..def');
+  expect(resolveRange('abc..', known)).toBe('abc..HEAD');
+  expect(resolveRange('def', known)).toBe('def');
+  expect(resolveRange('', known)).toBe('HEAD');
+  expect(resolveRange('abc...def', known)).toBe('abc...def');
 });

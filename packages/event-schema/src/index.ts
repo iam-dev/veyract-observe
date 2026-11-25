@@ -1,10 +1,10 @@
 export * from './types.js';
 export * from './allowlists.js';
 export * as validate from './validate.js';
-export * from './paths.js';
+export { pathCategory, relativePath } from './paths.js';
 export * from './commands.js';
 export * from './tool-fields.js';
 export * from './project-hook.js';
 export * from './task-tag.js';
-export * from './otlp-numbers.js';
+export { nanosToMs, parseNanos, parseValue } from './otlp-numbers.js';
 export * from './project-otlp.js';

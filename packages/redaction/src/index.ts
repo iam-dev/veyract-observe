@@ -9,9 +9,8 @@
  * only used as the last element of a pattern (it either succeeds and consumes
  * the run, or is never reached), so nothing of a matched value survives and no
  * start position rescans a long run. Input above MAX_REDACT_INPUT is not
- * scanned at all. Callers always use
- * truncate(redact(x).text, n): redact first, so a cut never exposes part of a
- * recognised secret. Nothing here throws an error that contains input text.
+ * scanned at all. Callers use redactAndTruncate (redact first, so a cut never
+ * exposes part of a recognised secret). Nothing here throws an error that contains input text.
  */
 
 export const MAX_REDACT_INPUT = 65_536;
@@ -121,7 +120,8 @@ export function redact(text: string): RedactResult {
   sub(URL_CREDENTIALS, (_m, scheme) => `${scheme}${marker('url-credentials')}@`);
   sub(BEARER, (_m, prefix) => `${prefix}${marker('bearer')}`);
   for (const [re, kind] of TOKEN_FORMATS) sub(re, () => marker(kind));
-  out = out.replace(DOTTED_RUN, (run: string) => redactJwtInRun(run, () => n++));
+  // Every JWT has an "eyJ" segment: skip the per-run pass when there is none.
+  if (out.includes('eyJ')) out = out.replace(DOTTED_RUN, (run: string) => redactJwtInRun(run, () => n++));
   sub(FLAG, (_m, prefix) => `${prefix}${marker('flag')}`);
   sub(ASSIGNMENT, (_m, prefix) => `${prefix}${marker('assignment')}`);
 
@@ -143,4 +143,9 @@ export function truncate(text: string, max: number): string {
   const prev = text.charCodeAt(cut - 1);
   if (cut > 0 && prev >= 0xd800 && prev <= 0xdbff) cut--;
   return `${text.slice(0, cut)}…[truncated]`;
+}
+
+/** The required order for bounded output: redact first, then truncate. */
+export function redactAndTruncate(text: string, max: number): string {
+  return truncate(redact(text).text, max);
 }

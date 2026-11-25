@@ -25,11 +25,13 @@ for (const [category, names] of Object.entries(CATEGORY_TABLE)) {
   for (const name of names) EXECUTABLE_CATEGORY.set(name, category as CommandCategory);
 }
 
+const PKG_SUBS: ReadonlySet<string> = new Set(['install', 'ci', 'test', 'run', 'add', 'remove', 'build', 'exec']);
+
 const SUBCOMMANDS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>(Object.entries({
   git: new Set(['status', 'diff', 'log', 'add', 'commit', 'push', 'pull', 'fetch', 'checkout', 'switch', 'branch', 'merge', 'rebase', 'stash', 'show', 'restore', 'reset', 'tag', 'worktree', 'clone']),
-  npm: new Set(['install', 'ci', 'test', 'run', 'add', 'remove', 'build', 'exec']),
-  pnpm: new Set(['install', 'ci', 'test', 'run', 'add', 'remove', 'build', 'exec']),
-  yarn: new Set(['install', 'ci', 'test', 'run', 'add', 'remove', 'build', 'exec']),
+  npm: PKG_SUBS,
+  pnpm: PKG_SUBS,
+  yarn: PKG_SUBS,
   cargo: new Set(['build', 'test', 'run', 'check', 'fmt', 'clippy']),
   go: new Set(['build', 'test', 'run', 'vet', 'mod']),
   docker: new Set(['build', 'run', 'ps', 'compose', 'pull', 'push']),

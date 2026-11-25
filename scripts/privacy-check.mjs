@@ -13,6 +13,8 @@ const RULES = [
 ];
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 const ALLOWED_EMAIL = /(?:@users\.noreply\.github\.com|@example\.invalid|@example\.com)$/i;
+// git@github.com is the SSH remote user, not a person (the publication gate names the remote).
+const ALLOWED_ADDRESSES = new Set(['noreply@anthropic.com', 'git@github.com']);
 
 export function findViolations(text, extraDeny = []) {
   const out = [];
@@ -21,7 +23,7 @@ export function findViolations(text, extraDeny = []) {
   }
   for (const m of text.matchAll(EMAIL_RE)) {
     const addr = m[0];
-    if (ALLOWED_EMAIL.test(addr) || ['noreply@anthropic.com', 'git@github.com'].includes(addr.toLowerCase())) continue;
+    if (ALLOWED_EMAIL.test(addr) || ALLOWED_ADDRESSES.has(addr.toLowerCase())) continue;
     out.push({ rule: 'email', index: m.index });
   }
   const lower = text.toLowerCase();
@@ -37,7 +39,7 @@ export function findViolations(text, extraDeny = []) {
   return out.sort((a, b) => a.index - b.index);
 }
 
-export function lineOf(text, index) {
+function lineOf(text, index) {
   let line = 1;
   for (let i = 0; i < index; i++) if (text.charCodeAt(i) === 10) line++;
   return line;
@@ -54,8 +56,11 @@ export function loadDenyList(cwd = process.cwd()) {
   }
 }
 
-function git(args, encoding = 'utf8') {
-  return execFileSync('git', args, { encoding, maxBuffer: 256 * 1024 * 1024 });
+/** Runs git; `encoding: 'buffer'` returns a Buffer, `quiet` discards stderr. Throws on a non-zero exit. */
+export function git(args, { encoding = 'utf8', quiet = false } = {}) {
+  return execFileSync('git', args, {
+    encoding, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', quiet ? 'ignore' : 'inherit'],
+  });
 }
 
 function isBinary(buf) {
@@ -69,7 +74,7 @@ function main() {
   let read;
   if (staged) {
     files = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z']).split('\0').filter(Boolean);
-    read = (f) => git(['show', `:${f}`], 'buffer');
+    read = (f) => git(['show', `:${f}`], { encoding: 'buffer' });
   } else {
     files = git(['ls-files', '-z']).split('\0').filter(Boolean);
     read = (f) => (existsSync(f) ? readFileSync(f) : Buffer.alloc(0));

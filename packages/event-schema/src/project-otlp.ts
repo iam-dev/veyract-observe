@@ -14,6 +14,7 @@
  * Phase 1 accepts no OTLP logs: cost comes from the metric only (D10), the timeline from hooks.
  */
 import { nanosToMs, parseNanos, parseValue, scaleHalfUp } from './otlp-numbers.js';
+import { isRecord, items, own, ownArray } from './own.js';
 import type { DetailLevel, HashFn, Named } from './types.js';
 import * as validate from './validate.js';
 
@@ -96,33 +97,7 @@ const MAX_KEY_LENGTH = 256;
 const MAX_VALUE_DEPTH = 8;
 const MAX_VALUE_NODES = 1_000;
 
-type Obj = object;
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
-
-function isRecord(v: unknown): v is Obj {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-/** Own data property only: inherited keys and accessors are never read (no getter is invoked). */
-function own(obj: Obj, key: string): unknown {
-  const d = Object.getOwnPropertyDescriptor(obj, key);
-  return d !== undefined && 'value' in d ? d.value : undefined;
-}
-
-/** An own array property: undefined when absent, null when present but not an array. */
-function ownArray(obj: Obj, key: string): readonly unknown[] | undefined | null {
-  const v = own(obj, key);
-  if (v === undefined) return undefined;
-  return Array.isArray(v) ? v : null;
-}
-
-/** Items of an own array, read by index as own data properties (no iterator, no getter). */
-function items(arr: readonly unknown[] | undefined): unknown[] {
-  const out: unknown[] = [];
-  if (arr === undefined) return out;
-  for (let i = 0; i < arr.length; i++) out.push(own(arr, String(i)));
-  return out;
-}
 
 class Malformed extends Error {}
 
@@ -176,11 +151,8 @@ function attributeMap(raw: unknown): Map<string, Json> {
   return map;
 }
 
-function mapToJson(m: Map<string, Json>): Json {
-  const out: { [k: string]: Json } = {};
-  for (const [k, v] of m) Object.defineProperty(out, k, { value: v, enumerable: true });
-  return out;
-}
+/** Object.fromEntries defines own properties, so a '__proto__' key stays plain data. */
+const mapToJson = (m: Map<string, Json>): Json => Object.fromEntries(m);
 
 function stringAttr(m: Map<string, Json>, key: string): string | undefined {
   const v = m.get(key);
@@ -208,11 +180,12 @@ interface MetricHeader {
   spec: InstrumentSpec;
   unit: string;
   temporality: 'delta' | 'cumulative';
-  temporalityCode: 1 | 2;
   monotonic: boolean;
+  /** `sum.dataPoints`: undefined when absent, null when not an array. */
+  points: readonly unknown[] | undefined | null;
 }
 
-function metricHeader(metric: Obj): MetricHeader | null {
+function metricHeader(metric: object): MetricHeader | null {
   const name = own(metric, 'name');
   const unit = own(metric, 'unit');
   const sum = own(metric, 'sum');
@@ -224,8 +197,8 @@ function metricHeader(metric: Obj): MetricHeader | null {
   const mono = own(sum, 'isMonotonic');
   if (mono !== undefined && typeof mono !== 'boolean') return null;
   return {
-    instrument: name as Instrument, spec, unit, temporalityCode: t,
-    temporality: t === 1 ? 'delta' : 'cumulative', monotonic: mono ?? false,
+    instrument: name as Instrument, spec, unit,
+    temporality: t === 1 ? 'delta' : 'cumulative', monotonic: mono ?? false, points: ownArray(sum, 'dataPoints'),
   };
 }
 
@@ -259,7 +232,7 @@ function projectPoint(
   // Stream key over everything, BEFORE any attribute is dropped. The canonical string is never kept.
   const streamKey = ctx.hash('stream', canonicalJSON({
     resource, scope, instrument: header.instrument, unit: header.unit,
-    temporality: header.temporalityCode, monotonic: header.monotonic, pointAttributes: mapToJson(attrs),
+    temporality: header.temporality === 'delta' ? 1 : 2, monotonic: header.monotonic, pointAttributes: mapToJson(attrs),
   }));
 
   const attributes: UsageSample['attributes'] = {};
@@ -310,7 +283,7 @@ export function projectOtlpMetrics(body: unknown, ctx: OtlpProjectionContext): O
     if (!isRecord(body)) { result.rejected++; return result; }
     const rms = ownArray(body, 'resourceMetrics');
     if (rms === null) { result.rejected++; return result; }
-    for (const rm of items(rms ?? undefined)) projectResourceMetrics(rm, ctx, result);
+    for (const rm of items(rms)) projectResourceMetrics(rm, ctx, result);
   } catch {
     // Defensive: no path above is expected to throw; never propagate on untrusted input.
     result.rejected++;
@@ -327,15 +300,15 @@ function projectResourceMetrics(rm: unknown, ctx: OtlpProjectionContext, result:
     resource = resourceIdentity(own(rm, 'resource'));
   } catch {
     // A malformed resource rejects everything under it, counted per data point where countable.
-    for (const sm of items(sms ?? undefined)) {
+    for (const sm of items(sms)) {
       const ms = isRecord(sm) ? ownArray(sm, 'metrics') : null;
-      if (Array.isArray(ms)) for (const m of items(ms)) result.rejected += countPoints(m);
+      if (Array.isArray(ms)) rejectMetrics(ms, result);
       else result.rejected++;
     }
     if (sms === undefined) result.rejected++;
     return;
   }
-  for (const sm of items(sms ?? undefined)) {
+  for (const sm of items(sms)) {
     if (!isRecord(sm)) { result.rejected++; continue; }
     const ms = ownArray(sm, 'metrics');
     if (ms === null) { result.rejected++; continue; }
@@ -343,22 +316,25 @@ function projectResourceMetrics(rm: unknown, ctx: OtlpProjectionContext, result:
     try {
       scope = scopeIdentity(own(sm, 'scope'));
     } catch {
-      for (const m of items(ms ?? undefined)) result.rejected += countPoints(m);
       if (ms === undefined) result.rejected++;
+      else rejectMetrics(ms, result);
       continue;
     }
-    for (const metric of items(ms ?? undefined)) projectMetric(metric, resource, scope, ctx, result);
+    for (const metric of items(ms)) projectMetric(metric, resource, scope, ctx, result);
   }
+}
+
+/** Rejects every metric of a list, counted per data point where countable. */
+function rejectMetrics(ms: readonly unknown[], result: OtlpMetricsResult): void {
+  for (const m of items(ms)) result.rejected += countPoints(m);
 }
 
 function projectMetric(metric: unknown, resource: Json, scope: Json, ctx: OtlpProjectionContext, result: OtlpMetricsResult): void {
   if (!isRecord(metric)) { result.rejected++; return; }
   const header = metricHeader(metric);
   if (header === null) { result.rejected += countPoints(metric); return; }
-  const sum = own(metric, 'sum') as Obj;
-  const points = ownArray(sum, 'dataPoints');
-  if (points === null) { result.rejected++; return; }
-  for (const point of items(points ?? undefined)) {
+  if (header.points === null) { result.rejected++; return; }
+  for (const point of items(header.points)) {
     let outcome: PointOutcome;
     try {
       outcome = projectPoint(point, header, resource, scope, ctx);
@@ -381,10 +357,10 @@ export function projectOtlpLogs(body: unknown): { accepted: 0; rejected: number 
     if (!isRecord(body)) return { accepted: 0, rejected: 1 };
     const rls = ownArray(body, 'resourceLogs');
     if (rls === null) return { accepted: 0, rejected: 1 };
-    for (const rl of items(rls ?? undefined)) {
+    for (const rl of items(rls)) {
       const sls = isRecord(rl) ? ownArray(rl, 'scopeLogs') : null;
       if (sls === null) { rejected++; continue; }
-      for (const sl of items(sls ?? undefined)) {
+      for (const sl of items(sls)) {
         const recs = isRecord(sl) ? ownArray(sl, 'logRecords') : null;
         if (recs === null) { rejected++; continue; }
         rejected += recs?.length ?? 0;

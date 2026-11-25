@@ -6,16 +6,11 @@
  * converted to milliseconds with BigInt division. A JS number is accepted only when it is a safe integer,
  * so no value is ever silently rounded on the way in. None of these functions throw.
  */
+import { isRecord, own } from './own.js';
 
 const NANOS_RE = /^\d{1,20}$/;
 const INT_RE = /^-?\d{1,20}$/;
 const MAX_INT64 = (1n << 63n) - 1n;
-
-/** Own data property only: inherited keys and accessors are never read (no getter is invoked). */
-function ownValue(obj: object, key: string): unknown {
-  const d = Object.getOwnPropertyDescriptor(obj, key);
-  return d !== undefined && 'value' in d ? d.value : undefined;
-}
 
 /**
  * A non-negative 64-bit nanosecond timestamp as a canonical decimal string (no leading zeros), or null.
@@ -48,9 +43,9 @@ function parseInt64AsSafe(v: unknown): number | null {
  * integer. NaN, ±Infinity, unsafe integers, both fields set (ambiguous oneof) or neither → null.
  */
 export function parseValue(point: unknown): number | null {
-  if (typeof point !== 'object' || point === null || Array.isArray(point)) return null;
-  const d = ownValue(point, 'asDouble');
-  const i = ownValue(point, 'asInt');
+  if (!isRecord(point)) return null;
+  const d = own(point, 'asDouble');
+  const i = own(point, 'asInt');
   if (d !== undefined && i !== undefined) return null;
   if (d !== undefined) return typeof d === 'number' && Number.isFinite(d) ? d : null;
   if (i !== undefined) return parseInt64AsSafe(i);

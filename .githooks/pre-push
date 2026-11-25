@@ -13,10 +13,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     *[!0]*) ;;
     *) continue ;; # deleting a remote ref: nothing to scan
   esac
-  case "$remote_sha" in
-    *[!0]*) range="$remote_sha..$local_sha" ;;
-    *) range="$local_sha" ;; # new remote ref: the full history of the local sha
-  esac
-  node "$gate" --range "$range" --remote-url "$url" </dev/null || status=1
+  # The gate resolves an all-zero remote sha (new remote ref) to the full history of the local sha.
+  node "$gate" --range "$remote_sha..$local_sha" --remote-url "$url" </dev/null || status=1
 done
 exit $status

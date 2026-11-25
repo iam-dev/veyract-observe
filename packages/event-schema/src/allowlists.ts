@@ -1,12 +1,22 @@
 import type { DetailLevel, HashFn, Named } from './types.js';
 
-export type SessionSource = 'startup' | 'resume' | 'clear' | 'compact' | 'other';
-export type SessionEndReason = 'clear' | 'logout' | 'prompt_input_exit' | 'other';
-export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'other';
+const SOURCES = ['startup', 'resume', 'clear', 'compact'] as const;
+const END_REASONS = ['clear', 'logout', 'prompt_input_exit'] as const;
+const TODO_STATUSES = ['pending', 'in_progress', 'completed'] as const;
 
-const SOURCES: ReadonlySet<string> = new Set(['startup', 'resume', 'clear', 'compact']);
-const END_REASONS: ReadonlySet<string> = new Set(['clear', 'logout', 'prompt_input_exit']);
-const TODO_STATUSES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'completed']);
+export type SessionSource = typeof SOURCES[number] | 'other';
+export type SessionEndReason = typeof END_REASONS[number] | 'other';
+export type TodoStatus = typeof TODO_STATUSES[number] | 'other';
+
+/** Unknown strings collapse to 'other'; only non-strings yield undefined. */
+function bucket<T extends string>(known: readonly T[]): (raw: unknown) => T | 'other' | undefined {
+  const set: ReadonlySet<string> = new Set(known);
+  return (raw) => (typeof raw !== 'string' ? undefined : set.has(raw) ? (raw as T) : 'other');
+}
+
+export const sessionSource = bucket(SOURCES);
+export const sessionEndReason = bucket(END_REASONS);
+export const todoStatus = bucket(TODO_STATUSES);
 
 export const BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'BashOutput', 'KillShell', 'Glob', 'Grep', 'LS',
@@ -20,36 +30,20 @@ export const KNOWN_AGENT_TYPES: ReadonlySet<string> = new Set([
 
 const NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
-/** Unknown strings collapse to 'other'; only non-strings yield undefined. */
-export function sessionSource(raw: unknown): SessionSource | undefined {
-  if (typeof raw !== 'string') return undefined;
-  return SOURCES.has(raw) ? (raw as SessionSource) : 'other';
-}
-
-export function sessionEndReason(raw: unknown): SessionEndReason | undefined {
-  if (typeof raw !== 'string') return undefined;
-  return END_REASONS.has(raw) ? (raw as SessionEndReason) : 'other';
-}
-
-export function todoStatus(raw: unknown): TodoStatus | undefined {
-  if (typeof raw !== 'string') return undefined;
-  return TODO_STATUSES.has(raw) ? (raw as TodoStatus) : 'other';
-}
-
 function classify(
-  raw: string, level: DetailLevel, hash: HashFn, kind: 'tool' | 'agent-type',
-  known: ReadonlySet<string>, bucket: (raw: string) => string,
+  raw: unknown, level: DetailLevel, hash: HashFn, kind: 'tool' | 'agent-type',
+  known: ReadonlySet<string>, bucketName: (raw: string) => string,
 ): Named | undefined {
   if (typeof raw !== 'string' || !NAME_PATTERN.test(raw)) return undefined;
-  if (known.has(raw)) return { name: raw };
-  if (level !== 'metadata') return { name: raw };
-  return { name: bucket(raw), pseudonym: hash(kind, raw) };
+  if (known.has(raw) || level !== 'metadata') return { name: raw };
+  return { name: bucketName(raw), pseudonym: hash(kind, raw) };
 }
 
-export function classifyTool(raw: string, level: DetailLevel, hash: HashFn): Named | undefined {
+/** Non-strings and malformed names yield undefined. */
+export function classifyTool(raw: unknown, level: DetailLevel, hash: HashFn): Named | undefined {
   return classify(raw, level, hash, 'tool', BUILTIN_TOOLS, (r) => (r.startsWith('mcp__') ? 'mcp' : 'other'));
 }
 
-export function classifyAgentType(raw: string, level: DetailLevel, hash: HashFn): Named | undefined {
+export function classifyAgentType(raw: unknown, level: DetailLevel, hash: HashFn): Named | undefined {
   return classify(raw, level, hash, 'agent-type', KNOWN_AGENT_TYPES, () => 'other');
 }
