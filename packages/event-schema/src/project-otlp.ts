@@ -7,13 +7,16 @@
  *
  * Stream identity (P1-02): before any attribute is dropped, every sample gets
  * `streamKey = hash('stream', canonicalJSON({ resource, scope, instrument, unit, temporality, monotonic,
- * pointAttributes }))` over ALL resource and point attributes. Identity attributes (user email, account ids,
+ * pointAttributes }))` over ALL resource and point attributes, where `resource` and `scope` are the
+ * fingerprints `hash('otlp-resource' | 'otlp-scope', canonicalJSON(...))`, computed once per parent node so
+ * the per-point hash input stays small however large the resource is. Identity attributes (user email, account ids,
  * organization) thus still separate streams, but the canonical string is only ever passed to `hash`; it is
  * never stored or returned. After that, only `session.id`, `model` and (per instrument) `type` are kept.
  *
  * Phase 1 accepts no OTLP logs: cost comes from the metric only (D10), the timeline from hooks.
  */
 import { nanosToMs, parseNanos, parseValue, scaleHalfUp } from './otlp-numbers.js';
+import { isKnownModel, readableNames } from './allowlists.js';
 import { isRecord, items, own, ownArray } from './own.js';
 import { isDetailLevel, type DetailLevel, type HashFn, type Named } from './types.js';
 import * as validate from './validate.js';
@@ -88,12 +91,6 @@ const INSTRUMENTS: ReadonlyMap<string, InstrumentSpec> = new Map<Instrument, Ins
   }],
 ]);
 
-/**
- * Model names kept readable at `metadata`: a known Claude family plus numeric version parts and an optional
- * 8-digit date (`claude-opus-5-5`, `claude-haiku-5-5-20261101`). Only digits vary, so no free text survives.
- * Anything else, including `claude-<anything>`, is `other` plus a pseudonym at `metadata`.
- */
-const CLAUDE_MODEL = /^claude-(?:opus|sonnet|haiku|fable)-\d{1,3}(?:-\d{1,3}){0,2}(?:-\d{8})?$/;
 const READABLE_MODEL = /^[A-Za-z0-9._:-]{1,64}$/;
 
 /** Bounds on attribute structures, which feed the stream key (loopback input is untrusted). */
@@ -101,6 +98,10 @@ const MAX_ATTRIBUTES = 128;
 const MAX_KEY_LENGTH = 256;
 const MAX_VALUE_DEPTH = 8;
 const MAX_VALUE_NODES = 1_000;
+/** Processing budget: data points examined per request; points beyond it are counted as rejected, unread. */
+export const MAX_OTLP_DATA_POINTS = 10_000;
+
+interface Walk { ctx: OtlpProjectionContext; result: OtlpMetricsResult; pointsLeft: number }
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -167,8 +168,8 @@ function stringAttr(m: Map<string, Json>, key: string): string | undefined {
 }
 
 function classifyModel(v: string, ctx: OtlpProjectionContext): Named {
-  if (CLAUDE_MODEL.test(v)) return { name: v };
-  if (ctx.level !== 'metadata' && READABLE_MODEL.test(v)) return { name: v };
+  if (isKnownModel(v)) return { name: v };
+  if (readableNames(ctx.level) && READABLE_MODEL.test(v)) return { name: v };
   return { name: 'other', pseudonym: ctx.hash('model', v) };
 }
 
@@ -262,34 +263,31 @@ function projectPoint(
   };
 }
 
-/**
- * canonicalJSON({ instrument, monotonic, pointAttributes, resource, scope, temporality, unit }), written out in
- * sorted key order. Resource and scope arrive already canonical: they are serialized once per parent node,
- * not once per data point, so a large resource cannot multiply the work by the number of points.
- */
+/** canonicalJSON of the stream identity; `resource` / `scope` are fixed-size fingerprints. */
 function streamIdentity(header: MetricHeader, resourceKey: string, scopeKey: string, attrs: Map<string, Json>): string {
-  return `{"instrument":${JSON.stringify(header.instrument)},"monotonic":${header.monotonic},`
-    + `"pointAttributes":${canonicalJSON(mapToJson(attrs))},"resource":${resourceKey},"scope":${scopeKey},`
-    + `"temporality":${header.temporality === 'delta' ? 1 : 2},"unit":${JSON.stringify(header.unit)}}`;
+  return canonicalJSON({
+    instrument: header.instrument, monotonic: header.monotonic, pointAttributes: mapToJson(attrs),
+    resource: resourceKey, scope: scopeKey, temporality: header.temporality === 'delta' ? 1 : 2, unit: header.unit,
+  });
 }
 
-/** The scope identity as canonical JSON. */
-function scopeIdentity(raw: unknown): string {
-  if (raw === undefined) return canonicalJSON({ name: null, version: null });
+/** The scope fingerprint: a keyed hash of its canonical JSON, computed once per scope. */
+function scopeIdentity(raw: unknown, ctx: OtlpProjectionContext): string {
+  if (raw === undefined) return ctx.hash('otlp-scope', canonicalJSON({ name: null, version: null }));
   if (!isRecord(raw)) throw new Malformed();
   const name = own(raw, 'name');
   const version = own(raw, 'version');
   if ((name !== undefined && typeof name !== 'string') || (version !== undefined && typeof version !== 'string')) {
     throw new Malformed();
   }
-  return canonicalJSON({ name: name ?? null, version: version ?? null });
+  return ctx.hash('otlp-scope', canonicalJSON({ name: name ?? null, version: version ?? null }));
 }
 
-/** The resource identity (all resource attributes) as canonical JSON. */
-function resourceIdentity(raw: unknown): string {
-  if (raw === undefined) return canonicalJSON({});
+/** The resource fingerprint: a keyed hash over ALL resource attributes, computed once per resource. */
+function resourceIdentity(raw: unknown, ctx: OtlpProjectionContext): string {
+  if (raw === undefined) return ctx.hash('otlp-resource', canonicalJSON({}));
   if (!isRecord(raw)) throw new Malformed();
-  return canonicalJSON(mapToJson(attributeMap(own(raw, 'attributes'))));
+  return ctx.hash('otlp-resource', canonicalJSON(mapToJson(attributeMap(own(raw, 'attributes')))));
 }
 
 export function projectOtlpMetrics(body: unknown, ctx: OtlpProjectionContext): OtlpMetricsResult {
@@ -300,7 +298,8 @@ export function projectOtlpMetrics(body: unknown, ctx: OtlpProjectionContext): O
     if (!isRecord(body)) { result.rejected++; return result; }
     const rms = ownArray(body, 'resourceMetrics');
     if (rms === null) { result.rejected++; return result; }
-    for (const rm of items(rms)) projectResourceMetrics(rm, ctx, result);
+    const walk: Walk = { ctx, result, pointsLeft: MAX_OTLP_DATA_POINTS };
+    for (const rm of items(rms)) projectResourceMetrics(rm, walk);
   } catch {
     // Defensive: no path above is expected to throw; never propagate on untrusted input.
     result.rejected++;
@@ -308,13 +307,14 @@ export function projectOtlpMetrics(body: unknown, ctx: OtlpProjectionContext): O
   return result;
 }
 
-function projectResourceMetrics(rm: unknown, ctx: OtlpProjectionContext, result: OtlpMetricsResult): void {
+function projectResourceMetrics(rm: unknown, walk: Walk): void {
+  const { ctx, result } = walk;
   if (!isRecord(rm)) { result.rejected++; return; }
   const sms = ownArray(rm, 'scopeMetrics');
   if (sms === null) { result.rejected++; return; }
   let resource: string;
   try {
-    resource = resourceIdentity(own(rm, 'resource'));
+    resource = resourceIdentity(own(rm, 'resource'), ctx);
   } catch {
     // A malformed resource rejects everything under it, counted per data point where countable.
     for (const sm of items(sms)) {
@@ -331,13 +331,13 @@ function projectResourceMetrics(rm: unknown, ctx: OtlpProjectionContext, result:
     if (ms === null) { result.rejected++; continue; }
     let scope: string;
     try {
-      scope = scopeIdentity(own(sm, 'scope'));
+      scope = scopeIdentity(own(sm, 'scope'), ctx);
     } catch {
       if (ms === undefined) result.rejected++;
       else rejectMetrics(ms, result);
       continue;
     }
-    for (const metric of items(ms)) projectMetric(metric, resource, scope, ctx, result);
+    for (const metric of items(ms)) projectMetric(metric, resource, scope, walk);
   }
 }
 
@@ -346,12 +346,15 @@ function rejectMetrics(ms: readonly unknown[], result: OtlpMetricsResult): void 
   for (const m of items(ms)) result.rejected += countPoints(m);
 }
 
-function projectMetric(metric: unknown, resource: string, scope: string, ctx: OtlpProjectionContext, result: OtlpMetricsResult): void {
+function projectMetric(metric: unknown, resource: string, scope: string, walk: Walk): void {
+  const { ctx, result } = walk;
   if (!isRecord(metric)) { result.rejected++; return; }
   const header = metricHeader(metric);
   if (header === null) { result.rejected += countPoints(metric); return; }
   if (header.points === null) { result.rejected++; return; }
   for (const point of items(header.points)) {
+    if (walk.pointsLeft <= 0) { result.rejected++; continue; } // over the processing budget: counted, not read
+    walk.pointsLeft--;
     let outcome: PointOutcome;
     try {
       outcome = projectPoint(point, header, resource, scope, ctx);

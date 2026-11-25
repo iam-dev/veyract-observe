@@ -32,8 +32,25 @@ export const KNOWN_AGENT_TYPES: readonly string[] = Object.freeze([
   'general-purpose', 'Explore', 'Plan', 'statusline-setup', 'claude-code-guide',
 ]);
 
+/**
+ * Model ids readable at `metadata`. An explicit list, not a pattern: a pattern would leave a caller-controlled
+ * channel (even digits). Any other model is `other` plus a pseudonym at `metadata` until it is added here.
+ */
+export const KNOWN_MODELS: readonly string[] = Object.freeze([
+  'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2',
+]);
+
 const TOOL_SET: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
 const AGENT_TYPE_SET: ReadonlySet<string> = new Set(KNOWN_AGENT_TYPES);
+const MODEL_SET: ReadonlySet<string> = new Set(KNOWN_MODELS);
+
+export const isKnownModel = (v: string): boolean => MODEL_SET.has(v);
+
+/**
+ * Whether open-ended names may be stored readable. Only the two explicit levels qualify: an unknown or
+ * misspelled level falls back to pseudonyms (fail closed), also for direct callers of the classifiers.
+ */
+export const readableNames = (level: unknown): boolean => level === 'detailed' || level === 'sensitive-local';
 
 const NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
@@ -42,7 +59,7 @@ function classify(
   known: ReadonlySet<string>, bucketName: (raw: string) => string,
 ): Named | undefined {
   if (typeof raw !== 'string' || !NAME_PATTERN.test(raw)) return undefined;
-  if (known.has(raw) || level !== 'metadata') return { name: raw };
+  if (known.has(raw) || readableNames(level)) return { name: raw };
   return { name: bucketName(raw), pseudonym: hash(kind, raw) };
 }
 
