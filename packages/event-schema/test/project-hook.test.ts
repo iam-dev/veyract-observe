@@ -1,5 +1,5 @@
 import {
-  projectHookPayload, relativePath, restrictedForm, BUILTIN_TOOLS, KNOWN_AGENT_TYPES,
+  projectHookPayload, relativePath, restrictedForm, BUILTIN_TOOLS, KNOWN_AGENT_TYPES, classifyTool, classifyAgentType,
   type DetailLevel, type HashFn, type ProjectionContext,
 } from '../src/index.js';
 import {
@@ -520,4 +520,12 @@ describe('review follow-up (F03, F05)', () => {
     expect(() => (BUILTIN_TOOLS as string[]).push('mcp__PLANTED__x')).toThrow(TypeError);
     expect(okResult(read, 'metadata').capture.tool).toEqual({ name: 'mcp', pseudonym: 'tool:15' });
   });
+});
+
+test('R3-04: the public classifiers fail closed on an unknown level', () => {
+  for (const level of ['Metadata', 'full', undefined, null]) {
+    expect(classifyTool('mcp__PLANTED__x', level as never, hash)).toEqual({ name: 'mcp', pseudonym: 'tool:15' });
+    expect(classifyAgentType('my-agent', level as never, hash)).toEqual({ name: 'other', pseudonym: 'agent-type:8' });
+  }
+  expect(classifyTool('mcp__PLANTED__x', 'detailed', hash)).toEqual({ name: 'mcp__PLANTED__x' });
 });

@@ -1,5 +1,5 @@
 import {
-  projectOtlpMetrics, projectOtlpLogs, parseNanos, nanosToMs, MAX_OTLP_BODY_BYTES,
+  projectOtlpMetrics, projectOtlpLogs, parseNanos, nanosToMs, MAX_OTLP_BODY_BYTES, MAX_OTLP_DATA_POINTS, KNOWN_MODELS,
   type DetailLevel, type HashFn,
 } from '../src/index.js';
 
@@ -227,18 +227,19 @@ describe('attributes', () => {
     scoped.resourceMetrics[0]!.scopeMetrics[0]!.scope.version = '9.9.9';
     expect(key(scoped)).not.toBe(base);
   });
-  test('the hash sees canonical sorted JSON, and only stream/model kinds are hashed', () => {
+  test('the hash sees canonical sorted JSON; resource and scope are hashed once and referenced by fingerprint', () => {
     const seen: Array<[string, string]> = [];
-    const spy: HashFn = (k, v) => { seen.push([k, v]); return `${k}:x`; };
-    projectOtlpMetrics(metricsBody([cost({ 'session.id': SID, b: 'B', a: 'A' })], { z: '1', y: '2' }), ctxAt('metadata', spy));
-    expect(seen).toHaveLength(1);
-    const [kind, canon] = seen[0]!;
-    expect(kind).toBe('stream');
+    const spy: HashFn = (k, v) => { seen.push([k, v]); return `${k}:fp`; };
+    projectOtlpMetrics(metricsBody([cost({ 'session.id': SID, b: 'B', a: 'A' }), cost({ c: 'C' })], { z: '1', y: '2' }), ctxAt('metadata', spy));
+    expect(seen.map(([k]) => k)).toEqual(['otlp-resource', 'otlp-scope', 'stream', 'stream']);
+    const [, resource] = seen[0]!;
+    expect(resource.indexOf('"y"')).toBeLessThan(resource.indexOf('"z"'));
+    const canon = seen[2]![1];
     const parsed = JSON.parse(canon) as Record<string, unknown>;
     expect(Object.keys(parsed)).toEqual(['instrument', 'monotonic', 'pointAttributes', 'resource', 'scope', 'temporality', 'unit']);
+    expect(parsed).toMatchObject({ resource: 'otlp-resource:fp', scope: 'otlp-scope:fp' });
     expect([1, 2]).toContain(parsed['temporality']); // the OTLP enum code, not the 'delta' / 'cumulative' label
     expect(canon.indexOf('"a"')).toBeLessThan(canon.indexOf('"b"'));
-    expect(canon.indexOf('"y"')).toBeLessThan(canon.indexOf('"z"'));
   });
 });
 
@@ -321,12 +322,11 @@ describe('review follow-up (F01, F02, F03)', () => {
   const model = (m: string, level: DetailLevel) =>
     projectOtlpMetrics(metricsBody([cost({ model: m })]), ctxAt(level)).samples[0]!.attributes.model;
 
-  test('F01: only known families with numeric versions are readable at metadata', () => {
-    for (const m of ['claude-opus-5-5', 'claude-haiku-5-5', 'claude-sonnet-4', 'claude-fable-5-2', 'claude-opus-5-5-20261101']) {
-      expect(model(m, 'metadata'), m).toEqual({ name: m });
-    }
+  test('F01 / R3-03: only explicitly listed models are readable at metadata', () => {
+    for (const m of KNOWN_MODELS) expect(model(m, 'metadata'), m).toEqual({ name: m });
     const planted = 'claude-' + 'acme-secret-project';
-    for (const m of [planted, 'claude-opus-five', 'claude-opus-5-5-preview', 'claude-x', 'claude-opus-5-5-2026']) {
+    for (const m of [planted, 'claude-opus-five', 'claude-opus-5-5-preview', 'claude-x', 'claude-opus-123-456-789-12345678',
+      'claude-sonnet-4', 'claude-opus-5-5-20261101']) {
       expect(model(m, 'metadata'), m).toEqual({ name: 'other', pseudonym: `model:${m.length}` });
     }
     expect(model(planted, 'detailed')).toEqual({ name: planted }); // readable from detailed, as documented
@@ -349,5 +349,25 @@ describe('review follow-up (F01, F02, F03)', () => {
     for (const bad of [{ level: 'Metadata', hash }, { level: 'full', hash }, { level: undefined, hash }, { level: 'metadata' }, null]) {
       expect(projectOtlpMetrics(body, bad as never)).toEqual({ samples: [], rejected: 1, noValue: 0 });
     }
+  });
+});
+
+describe('R3-01: OTLP processing is bounded', () => {
+  test('a large resource is hashed once, not once per data point', () => {
+    let bytes = 0;
+    const counting: HashFn = (k, v) => { bytes += v.length; return `${k}:fp`; };
+    const bigResource = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, 'v'.repeat(900)]));
+    const points = Array.from({ length: 2_000 }, () => cost({ 'session.id': SID }));
+    const r = projectOtlpMetrics(metricsBody(points, bigResource), ctxAt('metadata', counting));
+    expect(r.samples).toHaveLength(2_000);
+    // ~90 KB resource hashed once + 2,000 small stream inputs; per-point re-hashing would be ~180 MB.
+    expect(bytes).toBeLessThan(2_000_000);
+  });
+
+  test(`at most MAX_OTLP_DATA_POINTS points are examined; the rest are counted as rejected`, () => {
+    const n = MAX_OTLP_DATA_POINTS + 5;
+    const r = projectOtlpMetrics(metricsBody(Array.from({ length: n }, () => cost({}))), ctxMeta);
+    expect(r.samples).toHaveLength(MAX_OTLP_DATA_POINTS);
+    expect(r.rejected).toBe(5);
   });
 });

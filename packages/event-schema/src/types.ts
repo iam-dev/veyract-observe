@@ -34,7 +34,9 @@ export type CommandCategory =
   | 'git' | 'test' | 'package' | 'build' | 'file' | 'search' | 'network' | 'container' | 'observe' | 'other';
 
 /** Caller-supplied keyed hash; pure code in this package never sees a secret. */
-export type HashFn = (kind: 'tool' | 'agent-type' | 'model' | 'stream', value: string) => string;
+export type HashFn = (
+  kind: 'tool' | 'agent-type' | 'model' | 'stream' | 'otlp-resource' | 'otlp-scope', value: string,
+) => string;
 
 /**
  * A name that is either an allowlisted value, or 'mcp' / 'other' with `pseudonym = hash(kind, original)`
