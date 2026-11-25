@@ -89,3 +89,25 @@ test('truncate never cuts inside a marker', () => {
   expect(truncate('abcdef', 3)).toBe('abc…[truncated]'); expect(truncate('ab', 3)).toBe('ab');
   expect(truncate('x [REDACTED:github-token] y', 8)).toBe('x …[truncated]');
 });
+test('quoted values with spaces leave nothing behind', () => {
+  const w1 = 'hun' + 'ter', w2 = 'two' + 'words';
+  for (const [input, expected] of [
+    [`mysql --pass` + `word "${w1} ${w2}" db`, 'mysql --password "[REDACTED:flag]" db'],
+    [`--pass` + `word='${w1} ${w2}' x`, `--password='[REDACTED:flag]' x`],
+    [`PASS` + `WORD="${w1} ${w2}" cmd`, 'PASSWORD="[REDACTED:assignment]" cmd'],
+    [`{"to` + `ken": "${w1} ${w2}", "user": "u"}`, '{"token": "[REDACTED:assignment]", "user": "u"}'],
+    [`--to` + `ken "${w1} ${w2}`, '--token "[REDACTED:flag]'], // unterminated: redacted to end of line
+  ] as const) {
+    const r = redact(input);
+    expect(r.text).toBe(expected);
+    expect(r.text).not.toContain(w1);
+    expect(r.text).not.toContain(w2);
+  }
+  expect(redact(`--pass` + `word "a b"\nnext line`).text).toBe('--password "[REDACTED:flag]"\nnext line');
+});
+test('pathological quoted inputs finish fast', () => {
+  for (const s of ['password="'.repeat(6_500), `--password "${'x '.repeat(30_000)}`, `token='`.repeat(9_000)]) {
+    expect(s.length).toBeLessThanOrEqual(65_536);
+    const t = performance.now(); redact(s); expect(performance.now() - t).toBeLessThan(200);
+  }
+});

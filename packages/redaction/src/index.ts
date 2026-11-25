@@ -75,10 +75,14 @@ function redactJwtInRun(run: string, onHit: () => void): string {
   return out;
 }
 
-const FLAG = /(--(?:password|token|secret|api-key)(?:\s{1,8}|=)["']?)(?!\[REDACTED:)[^\s"']+/gi;
+// A secret value: a quoted run up to the closing quote (or end of line), so `"two words"` leaves nothing,
+// or an unquoted run. Groups: 2 = double quote, 3 = single quote (an optional escaping backslash is kept).
+// The quoted runs are the last element of the pattern, so the scan stays linear.
+const VALUE = String.raw`(?:(\\?")(?!\[REDACTED:)[^"\n]*|(\\?')(?!\[REDACTED:)[^'\n]*|(?!\[REDACTED:)[^\s"']+)`;
+const FLAG = new RegExp(String.raw`(--(?:password|token|secret|api-key)(?:\s{1,8}|=))` + VALUE, 'gi');
 // The optional (escaped) quote after the key covers JSON: {"password": "x"}.
-const ASSIGNMENT =
-  /((?:password|passwd|secret|token|api[_-]?key)[A-Za-z0-9_-]{0,20}(?:\\?["'])?\s{0,8}[=:]\s{0,8}(?:\\?["'])?)(?!\[REDACTED:)[^\s"']+/gi;
+const ASSIGNMENT = new RegExp(
+  String.raw`((?:password|passwd|secret|token|api[_-]?key)[A-Za-z0-9_-]{0,20}(?:\\?["'])?\s{0,8}[=:]\s{0,8})` + VALUE, 'gi');
 
 function redactPrivateKeys(text: string): { text: string; count: number } {
   let out = '';
@@ -110,10 +114,10 @@ export function redact(text: string): RedactResult {
   let out = pk.text;
   n += pk.count;
 
-  const sub = (re: RegExp, build: (m: string, p1: string) => string): void => {
-    out = out.replace(re, (m: string, p1: string) => {
+  const sub = (re: RegExp, build: (m: string, p1: string, q2?: string, q3?: string) => string): void => {
+    out = out.replace(re, (m: string, p1: string, q2?: string, q3?: string) => {
       n++;
-      return build(m, p1);
+      return build(m, p1, q2, q3);
     });
   };
 
@@ -122,8 +126,8 @@ export function redact(text: string): RedactResult {
   for (const [re, kind] of TOKEN_FORMATS) sub(re, () => marker(kind));
   // Every JWT has an "eyJ" segment: skip the per-run pass when there is none.
   if (out.includes('eyJ')) out = out.replace(DOTTED_RUN, (run: string) => redactJwtInRun(run, () => n++));
-  sub(FLAG, (_m, prefix) => `${prefix}${marker('flag')}`);
-  sub(ASSIGNMENT, (_m, prefix) => `${prefix}${marker('assignment')}`);
+  sub(FLAG, (_m, prefix, q2, q3) => `${prefix}${q2 ?? q3 ?? ''}${marker('flag')}`);
+  sub(ASSIGNMENT, (_m, prefix, q2, q3) => `${prefix}${q2 ?? q3 ?? ''}${marker('assignment')}`);
 
   return { text: out, redactions: n, omitted: false };
 }
