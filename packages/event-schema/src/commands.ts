@@ -25,7 +25,7 @@ for (const [category, names] of Object.entries(CATEGORY_TABLE)) {
   for (const name of names) EXECUTABLE_CATEGORY.set(name, category as CommandCategory);
 }
 
-const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
+const SUBCOMMANDS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>(Object.entries({
   git: new Set(['status', 'diff', 'log', 'add', 'commit', 'push', 'pull', 'fetch', 'checkout', 'switch', 'branch', 'merge', 'rebase', 'stash', 'show', 'restore', 'reset', 'tag', 'worktree', 'clone']),
   npm: new Set(['install', 'ci', 'test', 'run', 'add', 'remove', 'build', 'exec']),
   pnpm: new Set(['install', 'ci', 'test', 'run', 'add', 'remove', 'build', 'exec']),
@@ -34,7 +34,7 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   go: new Set(['build', 'test', 'run', 'vet', 'mod']),
   docker: new Set(['build', 'run', 'ps', 'compose', 'pull', 'push']),
   veyract: new Set(['observe']),
-};
+}));
 
 const SINGLE_WORD = new Set(['pytest', 'make', 'tsc', 'vitest', 'jest']);
 
@@ -61,13 +61,13 @@ export function commandCategory(command: string): CommandCategory {
 
 export function restrictedForm(command: string): string | null {
   if (typeof command !== 'string') return null;
-  if (/&&|\|\||;|\||`|\$\(/.test(command)) return null;
+  if (/&&|\|\||;|\||`|\$\(|[\r\n]/.test(command)) return null;
   const toks = tokens(command);
   const first = toks[0];
   if (first === undefined || ENV_ASSIGNMENT.test(first) || first === 'sudo') return null;
   const exe = baseName(first);
   if (SINGLE_WORD.has(exe)) return exe;
-  const subs = SUBCOMMANDS[exe];
+  const subs = SUBCOMMANDS.get(exe);
   const sub = toks[1];
   if (subs === undefined || sub === undefined || !subs.has(sub)) return null;
   return `${exe} ${sub}`;

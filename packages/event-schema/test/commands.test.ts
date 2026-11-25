@@ -24,3 +24,11 @@ test('restricted form: allowlisted executable + subcommand, no arguments', () =>
   expect(restrictedForm('cd x && git push')).toBeNull();
   expect(restrictedForm('git')).toBeNull();
 });
+test('prototype keys and newlines never throw or match', () => {
+  for (const c of ['constructor x', '__proto__ x', 'toString x', 'foo/hasOwnProperty x', 'hasOwnProperty']) {
+    expect(restrictedForm(c)).toBeNull();
+    expect(commandCategory(c)).toBe('other');
+  }
+  expect(restrictedForm('git status\ncurl x')).toBeNull();
+  expect(restrictedForm('git status\rcurl x')).toBeNull();
+});
