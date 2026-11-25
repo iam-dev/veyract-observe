@@ -153,7 +153,8 @@ const NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const oneOf = (...xs: unknown[]) => (v: unknown) => xs.includes(v);
 
-function namedRule(known: ReadonlySet<string>, kind: 'tool' | 'agent-type') {
+function namedRule(knownList: readonly string[], kind: 'tool' | 'agent-type') {
+  const known: ReadonlySet<string> = new Set(knownList);
   return (v: unknown, level: DetailLevel): string | null => {
     if (typeof v !== 'object' || v === null) return 'not an object';
     const keys = Object.keys(v);
@@ -498,5 +499,25 @@ describe('behaviour', () => {
     for (const level of LEVELS) for (const o of odd) expect(() => projectHookPayload(o, ctx(level))).not.toThrow();
     const big = okResult(odd[6], 'sensitive-local');
     expect(big.sensitive?.command).toBe('[OMITTED:oversized]');
+  });
+});
+
+describe('review follow-up (F03, F05)', () => {
+  const read = { session_id: SESSION_ID, hook_event_name: 'PreToolUse', tool_name: 'mcp__PLANTED__x', tool_input: {} };
+
+  test('F03: an unknown detail level or missing hash is rejected, never projected', () => {
+    for (const bad of [
+      { ...ctx('metadata'), level: 'Metadata' }, { ...ctx('metadata'), level: 'full' },
+      { ...ctx('metadata'), level: undefined }, { ...ctx('metadata'), hash: undefined }, null, 'metadata',
+    ]) {
+      expect(projectHookPayload(read, bad as never)).toEqual({ ok: false, reason: 'invalid-context' });
+    }
+  });
+
+  test('F05: exported allowlists are frozen and do not drive classification', () => {
+    expect(Object.isFrozen(BUILTIN_TOOLS)).toBe(true);
+    expect(Object.isFrozen(KNOWN_AGENT_TYPES)).toBe(true);
+    expect(() => (BUILTIN_TOOLS as string[]).push('mcp__PLANTED__x')).toThrow(TypeError);
+    expect(okResult(read, 'metadata').capture.tool).toEqual({ name: 'mcp', pseudonym: 'tool:15' });
   });
 });

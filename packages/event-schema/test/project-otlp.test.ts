@@ -316,3 +316,38 @@ describe('logs', () => {
 test('transport limit constant', () => {
   expect(MAX_OTLP_BODY_BYTES).toBe(8 * 1024 * 1024);
 });
+
+describe('review follow-up (F01, F02, F03)', () => {
+  const model = (m: string, level: DetailLevel) =>
+    projectOtlpMetrics(metricsBody([cost({ model: m })]), ctxAt(level)).samples[0]!.attributes.model;
+
+  test('F01: only known families with numeric versions are readable at metadata', () => {
+    for (const m of ['claude-opus-5-5', 'claude-haiku-5-5', 'claude-sonnet-4', 'claude-fable-5-2', 'claude-opus-5-5-20261101']) {
+      expect(model(m, 'metadata'), m).toEqual({ name: m });
+    }
+    const planted = 'claude-' + 'acme-secret-project';
+    for (const m of [planted, 'claude-opus-five', 'claude-opus-5-5-preview', 'claude-x', 'claude-opus-5-5-2026']) {
+      expect(model(m, 'metadata'), m).toEqual({ name: 'other', pseudonym: `model:${m.length}` });
+    }
+    expect(model(planted, 'detailed')).toEqual({ name: planted }); // readable from detailed, as documented
+  });
+
+  test('F02: the stream identity is canonical JSON (sorted keys at every depth, no whitespace)', () => {
+    const sortDeep = (v: unknown): unknown => Array.isArray(v) ? v.map(sortDeep)
+      : v !== null && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortDeep((v as Record<string, unknown>)[k])]))
+        : v;
+    const seen: string[] = [];
+    const spy: HashFn = (k, v) => { if (k === 'stream') seen.push(v); return `${k}:x`; };
+    projectOtlpMetrics(metricsBody([cost({ 'session.id': SID, b: 'B', a: 'A' }), cost({ z: '1' })], { y: '2', x: '1' }), ctxAt('metadata', spy));
+    expect(seen).toHaveLength(2);
+    for (const canon of seen) expect(JSON.stringify(sortDeep(JSON.parse(canon)))).toBe(canon);
+  });
+
+  test('F03: an unknown detail level or missing hash fails closed', () => {
+    const body = metricsBody([cost({ model: 'acme-internal-llm' })]);
+    for (const bad of [{ level: 'Metadata', hash }, { level: 'full', hash }, { level: undefined, hash }, { level: 'metadata' }, null]) {
+      expect(projectOtlpMetrics(body, bad as never)).toEqual({ samples: [], rejected: 1, noValue: 0 });
+    }
+  });
+});

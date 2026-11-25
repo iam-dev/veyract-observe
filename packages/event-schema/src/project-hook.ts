@@ -14,7 +14,7 @@ import { own, isRecord } from './own.js';
 import { categoryOfRelative, relativePath } from './paths.js';
 import { TOOL_FIELDS, type ToolFieldSpec } from './tool-fields.js';
 import {
-  HOOK_EVENT_TYPES, type DetailLevel, type EventType, type HashFn, type HookEventName, type ProjectedCapture,
+  HOOK_EVENT_TYPES, isDetailLevel, type DetailLevel, type EventType, type HashFn, type HookEventName, type ProjectedCapture,
   type SensitiveDetail,
 } from './types.js';
 import * as validate from './validate.js';
@@ -26,7 +26,8 @@ export interface ProjectionContext {
   hash: HashFn;
 }
 
-export type RejectReason = 'malformed' | 'unsupported-event' | 'invalid-field';
+/** `invalid-context`: the caller's context is unusable (unknown detail level); nothing is projected. */
+export type RejectReason = 'malformed' | 'unsupported-event' | 'invalid-field' | 'invalid-context';
 
 export type ProjectionResult =
   | { ok: true; capture: ProjectedCapture; sensitive?: SensitiveDetail }
@@ -55,6 +56,7 @@ function addCallerAgent(raw: object, capture: ProjectedCapture, ctx: ProjectionC
 }
 
 export function projectHookPayload(raw: unknown, ctx: ProjectionContext): ProjectionResult {
+  if (!isRecord(ctx) || !isDetailLevel(ctx.level) || typeof ctx.hash !== 'function') return reject('invalid-context');
   if (!isRecord(raw)) return reject('malformed');
   const hookEventRaw = own(raw, 'hook_event_name');
   if (typeof hookEventRaw !== 'string') return reject('malformed');
