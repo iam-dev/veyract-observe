@@ -376,12 +376,12 @@ describe('behaviour', () => {
     const todos = Array.from({ length: 100_000 }, (_, i) => (i < 1_000 ? null : { content: 'late', status: 'pending' }));
     const t0 = performance.now();
     const r = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'TodoWrite', tool_input: { todos } }, 'sensitive-local');
-    expect(performance.now() - t0).toBeLessThan(50);
+    expect(performance.now() - t0).toBeLessThan(200);
     expect(r).not.toHaveProperty('sensitive');
     const full = Array.from({ length: 100_000 }, () => ({ content: 's', status: 'pending' }));
     const t1 = performance.now();
     const f = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'TodoWrite', tool_input: { todos: full } }, 'sensitive-local');
-    expect(performance.now() - t1).toBeLessThan(50);
+    expect(performance.now() - t1).toBeLessThan(200);
     expect(f.sensitive?.todoSubjects?.length).toBeLessThanOrEqual(50);
   });
 

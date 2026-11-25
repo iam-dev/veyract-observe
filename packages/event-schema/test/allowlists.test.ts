@@ -7,8 +7,8 @@ test('sources and reasons: known kept, unknown → other', () => {
 });
 test('tools: built-in readable, MCP and unknown pseudonymised at metadata', () => {
   expect(classifyTool('Bash', 'metadata', H)).toEqual({ name: 'Bash' });
-  expect(classifyTool('mcp__claude_ai_Notion__notion-fetch', 'metadata', H)).toEqual({ name: 'mcp', pseudonym: 'tool:35' });
-  expect(classifyTool('mcp__claude_ai_Notion__notion-fetch', 'detailed', H)).toEqual({ name: 'mcp__claude_ai_Notion__notion-fetch' });
+  expect(classifyTool('mcp__synthetic__fetch', 'metadata', H)).toEqual({ name: 'mcp', pseudonym: 'tool:21' });
+  expect(classifyTool('mcp__synthetic__fetch', 'detailed', H)).toEqual({ name: 'mcp__synthetic__fetch' });
   expect(classifyTool('deploy_prod_db', 'metadata', H)).toEqual({ name: 'other', pseudonym: 'tool:14' });
   expect(classifyTool('deploy_prod_db', 'detailed', H)).toEqual({ name: 'deploy_prod_db' });
   expect(classifyTool('bad name', 'detailed', H)).toBeUndefined();

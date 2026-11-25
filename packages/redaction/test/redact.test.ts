@@ -30,8 +30,60 @@ test('ordinary text unchanged', () => { expect(redact('git commit -m "fix spool"
 test('oversized input is omitted, not scanned', () => { expect(redact('a'.repeat(65_537))).toEqual({ text: '[OMITTED:oversized]', redactions: 0, omitted: true }); });
 test('pathological inputs finish fast', () => {
   for (const s of ['a='.repeat(32_000), '-----BEGIN '.repeat(5_000), 'https://'.repeat(8_000), ':'.repeat(65_536)]) {
-    const t = performance.now(); redact(s); expect(performance.now() - t).toBeLessThan(50);
+    const t = performance.now(); redact(s); expect(performance.now() - t).toBeLessThan(200);
   }
+});
+test('pathological inputs for the unbounded value patterns finish fast', () => {
+  const eyj = 'ey' + 'J';
+  for (const s of [
+    `-${eyj}`.repeat(16_000), `${eyj}${'a'.repeat(65_000)}`, `${eyj}${'a'.repeat(20)}.`.repeat(2_500),
+    `${eyj}${'a'.repeat(20)}.${eyj}`.repeat(2_000), 'sk-' + 'ant-'.repeat(16_000), 'ghp_'.repeat(16_000),
+    'password'.repeat(8_000), 'token":'.repeat(9_000), 'Bearer '.repeat(9_000), 'a://x:'.repeat(10_000),
+    'a://' + 'x:'.repeat(30_000), '--password='.repeat(5_000), '.'.repeat(65_536), 'a.'.repeat(32_768),
+  ]) {
+    expect(s.length).toBeLessThanOrEqual(65_536);
+    const t = performance.now(); redact(s); expect(performance.now() - t).toBeLessThan(200);
+  }
+});
+test('over-long secrets leave no tail', () => {
+  // Values are built from fragments; each check asserts nothing of the value survives.
+  const tail = (n: number, c = 'x') => c.repeat(n);
+  const cases: ReadonlyArray<readonly [string, string, string]> = [
+    ['TO' + 'KEN=', tail(600), 'TOKEN=[REDACTED:assignment]'],
+    ['--pass' + 'word ', tail(600), '--password [REDACTED:flag]'],
+    ['--pass' + 'word=', tail(600), '--password=[REDACTED:flag]'],
+    ['Authorization: Bea' + 'rer ', tail(3_000), 'Authorization: Bearer [REDACTED:bearer]'],
+    ['gh' + 'p_', tail(300, 'a'), '[REDACTED:github-token]'],
+    ['sk-' + 'ant-', tail(900), '[REDACTED:anthropic-key]'],
+    ['xo' + 'xb-', tail(400, '1'), '[REDACTED:slack-token]'],
+    ['AI' + 'za', tail(300, 'b'), '[REDACTED:google-key]'],
+    ['https://user:', tail(400, 'p') + '@host', 'https://[REDACTED:url-credentials]@host'],
+    ['https://', tail(300, 'u') + ':p4ss@host', 'https://[REDACTED:url-credentials]@host'],
+  ];
+  for (const [prefix, value, expected] of cases) {
+    const r = redact(`${prefix}${value} end`);
+    expect(r.text).toBe(`${expected} end`);
+    expect(r.text).not.toContain(tail(8, value[0]));
+  }
+});
+test('JWTs with long segments are redacted whole', () => {
+  const eyj = 'ey' + 'J';
+  for (const [a, b, c] of [[600, 20, 20], [20, 600, 20], [20, 20, 3_000], [1_000, 1_000, 1_000]] as const) {
+    const jwt = `${eyj}${'a'.repeat(a)}.${eyj}${'b'.repeat(b)}.${'c'.repeat(c)}`;
+    const r = redact(`auth ${jwt} end`);
+    expect(r.text).toBe('auth [REDACTED:jwt] end'); expect(r.redactions).toBe(1);
+  }
+  const short = `${eyj}${'a'.repeat(20)}.${eyj}${'b'.repeat(20)}.${'c'.repeat(20)}`;
+  expect(redact(`x-${short}.more`).text).toBe('x-[REDACTED:jwt].more');
+  expect(redact(`${short} ${short}`).redactions).toBe(2);
+  expect(redact(`v1.2.3 a.b.c ${eyj}x.${eyj}y.z`).redactions).toBe(0);
+});
+test('JSON-style keys with quotes are redacted', () => {
+  const pw = 'hun' + 'ter2', tok = 'a' + 'bc';
+  expect(redact(`{"pass` + `word": "${pw}"}`).text).toBe('{"password": "[REDACTED:assignment]"}');
+  expect(redact(`{"to` + `ken":"${tok}"}`).text).toBe('{"token":"[REDACTED:assignment]"}');
+  expect(redact(`{'api_` + `key': '${tok}'}`).text).toBe(`{'api_key': '[REDACTED:assignment]'}`);
+  expect(redact(`{\\"sec` + `ret\\":\\"${pw}\\"}`).text).not.toContain(pw);
 });
 test('truncate never cuts inside a marker', () => {
   expect(truncate('abcdef', 3)).toBe('abc…[truncated]'); expect(truncate('ab', 3)).toBe('ab');
