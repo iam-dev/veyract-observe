@@ -44,7 +44,10 @@ export interface ProjectedCapture {
   source?: SessionSource;
   reason?: SessionEndReason;
   agentId?: string;
+  /** The CALLING agent's type (top-level `agent_type`); absent on main-thread calls. Pairs with `agentId`. */
   agentType?: Named;
+  /** Task / Agent tool calls only: the REQUESTED subagent type (`tool_input.subagent_type`). */
+  subagentType?: Named;
   promptLength?: number;
   pathCategory?: PathCategory;
   commandCategory?: CommandCategory;

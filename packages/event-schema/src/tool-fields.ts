@@ -10,7 +10,10 @@ export interface ToolFieldSpec {
   readonly command?: 'command';
   /** TodoWrite `todos[].content` / `todos[].status`: sensitive-local only. */
   readonly todos?: 'todos';
-  /** Task / Agent: requested subagent type (classified agent type) at all levels. */
+  /**
+   * Task / Agent: requested subagent type, classified like an agent type, at all levels. It goes to
+   * `subagentType`; `agentType` / `agentId` always describe the caller (top-level fields).
+   */
   readonly subagentType?: 'subagent_type';
   /** Task / Agent description: sensitive-local only. */
   readonly description?: 'description';

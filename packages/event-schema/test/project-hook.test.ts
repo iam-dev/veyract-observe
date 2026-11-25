@@ -119,11 +119,15 @@ describe('layer 2: residual-field accounting', () => {
     for (const p of nameCases) {
       const r = okResult(p, 'metadata');
       expect(JSON.stringify(r)).not.toContain('PLANTED');
-      const { tool, agentType } = r.capture;
+      const { tool, agentType, subagentType } = r.capture;
       if (p.tool_name === TOOL) expect(tool).toEqual({ name: 'other', pseudonym: `tool:${TOOL.length}` });
       if (p.tool_name === MCP) expect(tool).toEqual({ name: 'mcp', pseudonym: `tool:${MCP.length}` });
-      if (p.hook_event_name.startsWith('Subagent') || p.agent_type === AGENT || p.tool_name === 'Agent') {
+      if (p.hook_event_name.startsWith('Subagent') || p.agent_type === AGENT) {
         expect(agentType).toEqual({ name: 'other', pseudonym: `agent-type:${AGENT.length}` });
+      }
+      if (p.tool_name === 'Agent') {
+        expect(agentType).toBeUndefined();
+        expect(subagentType).toEqual({ name: 'other', pseudonym: `agent-type:${AGENT.length}` });
       }
     }
   });
@@ -131,6 +135,7 @@ describe('layer 2: residual-field accounting', () => {
   test('at detailed the validated original name is kept without pseudonym', () => {
     expect(okResult(nameCases[0], 'detailed').capture.tool).toEqual({ name: TOOL });
     expect(okResult(nameCases[3], 'detailed').capture.agentType).toEqual({ name: AGENT });
+    expect(okResult(nameCases[6], 'detailed').capture.subagentType).toEqual({ name: AGENT });
   });
 });
 
@@ -183,6 +188,7 @@ const CAPTURE_RULES: Record<string, Rule> = {
   reason: enumRule('clear', 'logout', 'prompt_input_exit', 'other'),
   agentId: re(/^[A-Za-z0-9]{1,64}$/),
   agentType: namedRule(KNOWN_AGENT_TYPES, 'agent-type'),
+  subagentType: namedRule(KNOWN_AGENT_TYPES, 'agent-type'),
   promptLength: nonNegInt,
   pathCategory: enumRule('source', 'test', 'config', 'docs', 'outside', 'none'),
   commandCategory: enumRule('git', 'test', 'package', 'build', 'file', 'search', 'network', 'container', 'observe', 'other'),
@@ -315,7 +321,8 @@ describe('behaviour', () => {
     const a = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'Task',
       tool_input: { description: 'd'.repeat(300), prompt: 'never', subagent_type: 'Plan' } }, 'sensitive-local');
     expect(a.sensitive).toEqual({ subagentDescription: 'd'.repeat(200) + CUT });
-    expect(a.capture.agentType).toEqual({ name: 'Plan' });
+    expect(a.capture.subagentType).toEqual({ name: 'Plan' });
+    expect(a.capture).not.toHaveProperty('agentType');
     expect(JSON.stringify(a)).not.toContain('never');
   });
 
@@ -326,6 +333,77 @@ describe('behaviour', () => {
     expect(okResult(read, 'sensitive-local')).not.toHaveProperty('sensitive');
     const badTodos = { ...base, hook_event_name: 'PreToolUse', tool_name: 'TodoWrite', tool_input: { todos: [null, 3, { status: 'pending' }] } };
     expect(okResult(badTodos, 'sensitive-local')).not.toHaveProperty('sensitive');
+  });
+
+  test('agentId / agentType describe the caller; Task / Agent add subagentType', () => {
+    const fromExplore = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'Agent', agent_id: AGENT_ID,
+      agent_type: 'Explore', tool_input: { subagent_type: 'Plan', description: 'd' } }, 'metadata');
+    expect(fromExplore.capture).toMatchObject({ agentId: AGENT_ID, agentType: { name: 'Explore' }, subagentType: { name: 'Plan' } });
+    const custom = okResult({ ...base, hook_event_name: 'PostToolUse', tool_name: 'Task', agent_id: AGENT_ID,
+      agent_type: 'Explore', tool_input: { subagent_type: 'my-reviewer' } }, 'metadata');
+    expect(custom.capture.subagentType).toEqual({ name: 'other', pseudonym: 'agent-type:11' });
+    const missing = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'Agent', agent_id: AGENT_ID,
+      agent_type: 'Explore', tool_input: { description: 'd' } }, 'detailed');
+    expect(missing.capture.agentType).toEqual({ name: 'Explore' });
+    expect(missing.capture).not.toHaveProperty('subagentType');
+    const notAgentTool = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'Read',
+      tool_input: { file_path: `${REPO_ROOT}/a.ts`, subagent_type: 'Plan' } }, 'detailed');
+    expect(notAgentTool.capture).not.toHaveProperty('subagentType');
+  });
+
+  test("repoRoot '/' (or another root without a segment) never yields detail.path", () => {
+    for (const repoRoot of ['/', '//', '/./']) {
+      for (const level of ['detailed', 'sensitive-local'] as const) {
+        const r = projectHookPayload({ ...base, hook_event_name: 'PreToolUse', tool_name: 'Read',
+          tool_input: { file_path: '/srv/data/secret.txt' } }, { ...ctx(level), repoRoot });
+        expect(r.ok && r.capture.pathCategory).toBe('outside');
+        expect(r.ok && r.capture).not.toHaveProperty('detail');
+        expect(JSON.stringify(r)).not.toContain('secret');
+      }
+    }
+  });
+
+  test('paths with C1, separator or bidi control characters are not kept as detail.path', () => {
+    for (const ch of ['\u202e', '\u0085', '\u009b', '\u2028', '\u2029', '\u200e', '\u200f', '\u202a', '\u2066', '\u2069']) {
+      const p = { ...base, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: `${REPO_ROOT}/src/a${ch}st.ts` } };
+      const r = okResult(p, 'detailed');
+      expect(r.capture, JSON.stringify(ch)).not.toHaveProperty('detail');
+      expect(r.capture.pathCategory).toBe('source');
+    }
+  });
+
+  test('the TodoWrite scan stops after 1,000 items', () => {
+    const todos = Array.from({ length: 100_000 }, (_, i) => (i < 1_000 ? null : { content: 'late', status: 'pending' }));
+    const t0 = performance.now();
+    const r = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'TodoWrite', tool_input: { todos } }, 'sensitive-local');
+    expect(performance.now() - t0).toBeLessThan(50);
+    expect(r).not.toHaveProperty('sensitive');
+    const full = Array.from({ length: 100_000 }, () => ({ content: 's', status: 'pending' }));
+    const t1 = performance.now();
+    const f = okResult({ ...base, hook_event_name: 'PreToolUse', tool_name: 'TodoWrite', tool_input: { todos: full } }, 'sensitive-local');
+    expect(performance.now() - t1).toBeLessThan(50);
+    expect(f.sensitive?.todoSubjects?.length).toBeLessThanOrEqual(50);
+  });
+
+  test('no content digest: the hash only ever sees tool names and agent types from the payload', () => {
+    const { plant } = recordingPlanter();
+    const extra = [
+      { ...base, hook_event_name: 'PreToolUse', tool_name: 'NotARealTool', agent_id: AGENT_ID, agent_type: 'custom-caller',
+        tool_input: { command: 'cmd', file_path: `${REPO_ROOT}/x.ts` } },
+      { ...base, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'custom-sub', description: 'd', prompt: 'p' } },
+      { ...base, hook_event_name: 'SubagentStart', agent_id: AGENT_ID, agent_type: 'custom-start' },
+    ];
+    const all = [...syntheticPayloads(plant).map((p) => p.payload), ...extra] as Array<Record<string, unknown>>;
+    let calls = 0;
+    for (const payload of all) {
+      const input = payload.tool_input as Record<string, unknown> | undefined;
+      const allowed = new Set([payload.tool_name, payload.agent_type, input?.subagent_type].filter((v) => typeof v === 'string'));
+      const seen: string[] = [];
+      const spy: HashFn = (k, v) => { seen.push(v); calls++; return hash(k, v); };
+      for (const level of LEVELS) projectHookPayload(payload, { ...ctx(level), hash: spy });
+      for (const v of seen) expect(allowed.has(v), `${String(payload.hook_event_name)}: ${v}`).toBe(true);
+    }
+    expect(calls).toBeGreaterThan(0);
   });
 
   test('UserPromptSubmit keeps only the prompt length', () => {

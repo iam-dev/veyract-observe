@@ -4,14 +4,24 @@ import type { PathCategory } from './types.js';
 const MAX_RELATIVE = 512;
 
 /**
+ * A usable repository root: absolute, no backslash, and at least one non-empty segment after
+ * normalization. '/', '//' or '/./' are not roots: everything would count as inside them.
+ */
+function usableRoot(repoRoot: string | null): string | null {
+  if (typeof repoRoot !== 'string' || !posix.isAbsolute(repoRoot) || repoRoot.includes('\\')) return null;
+  const root = posix.normalize(repoRoot).replace(/\/+$/, '');
+  return root.split('/').some((s) => s !== '') ? root : null;
+}
+
+/**
  * Lexical only: no filesystem access, no symlink resolution. Plan 2 passes real (resolved) paths.
- * Returns a normalized repo-relative POSIX path, or null if the path is not provably inside the root.
+ * Returns a normalized repo-relative POSIX path, or null if the path is not provably inside the root
+ * (including when the root is not usable, e.g. '/').
  */
 export function relativePath(absPath: string, repoRoot: string | null): string | null {
-  if (repoRoot === null || typeof absPath !== 'string') return null;
-  if (!posix.isAbsolute(absPath) || !posix.isAbsolute(repoRoot)) return null;
-  if (absPath.includes('\\') || repoRoot.includes('\\')) return null;
-  const root = posix.normalize(repoRoot).replace(/\/+$/, '');
+  const root = usableRoot(repoRoot);
+  if (root === null || typeof absPath !== 'string') return null;
+  if (!posix.isAbsolute(absPath) || absPath.includes('\\')) return null;
   const norm = posix.normalize(absPath);
   const prefix = root + '/';
   if (!norm.startsWith(prefix)) return null;

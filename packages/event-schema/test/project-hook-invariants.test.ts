@@ -141,7 +141,7 @@ describe('layer 4: invariants', () => {
             expect(r.ok).toBe(true);
             if (!r.ok) continue;
             expect(r).not.toHaveProperty('sensitive');
-            for (const k of ['detail', 'commandCategory', 'pathCategory', 'agentType']) expect(r.capture, `${tool} ${ev} ${level}`).not.toHaveProperty(k);
+            for (const k of ['detail', 'commandCategory', 'pathCategory', 'agentType', 'subagentType']) expect(r.capture, `${tool} ${ev} ${level}`).not.toHaveProperty(k);
           }
         }
       }

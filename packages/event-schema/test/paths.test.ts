@@ -20,3 +20,13 @@ test('pathCategory', () => {
   expect(pathCategory('/elsewhere/x', '/r')).toBe('outside');
   expect(pathCategory(undefined, '/r')).toBe('none');
 });
+
+test('a root without a non-empty segment is not usable', () => {
+  for (const root of ['/', '//', '/./', '/../']) {
+    expect(relativePath('/srv/data/secret.txt', root)).toBeNull();
+    expect(pathCategory('/srv/data/secret.txt', root)).toBe('outside');
+    expect(pathCategory(undefined, root)).toBe('none');
+  }
+  expect(relativePath('/r/a.ts', '/r/')).toBe('a.ts');
+  expect(relativePath('/r/a.ts', '//r/./')).toBe('a.ts');
+});

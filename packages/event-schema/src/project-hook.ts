@@ -34,7 +34,10 @@ const SENSITIVE_COMMAND_MAX = 500;
 const TODO_SUBJECT_MAX = 200;
 const TODO_MAX_ITEMS = 50;
 const SUBAGENT_DESCRIPTION_MAX = 200;
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+/** Scan at most this many todo items, however few were usable (hook budget). */
+const TODO_MAX_SCAN = 1_000;
+/** C0/C1 controls, line/paragraph separators and bidi controls: never kept in a readable path. */
+const UNSAFE_PATH_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
 const EVENT_TYPES: ReadonlyMap<string, EventType> = new Map<HookEventName, EventType>([
   ['SessionStart', 'session.started'],
@@ -154,9 +157,13 @@ function projectToolEvent(
   const input = isRecord(inputRaw) ? inputRaw : undefined;
   const field = (key: string | undefined): unknown => (input !== undefined && key !== undefined ? own(input, key) : undefined);
 
-  // Task / Agent: the requested subagent type; other tools: the calling subagent's type.
-  const agentType = classifyAgent(spec?.subagentType !== undefined ? field(spec.subagentType) : own(raw, 'agent_type'), ctx);
+  // agentId / agentType always describe the caller; Task / Agent add the requested type separately.
+  const agentType = classifyAgent(own(raw, 'agent_type'), ctx);
   if (agentType !== undefined) capture.agentType = agentType;
+  if (spec?.subagentType !== undefined) {
+    const subagentType = classifyAgent(field(spec.subagentType), ctx);
+    if (subagentType !== undefined) capture.subagentType = subagentType;
+  }
   if (spec === undefined) return { ok: true, capture };
 
   const pathRaw = field(spec.path);
@@ -171,7 +178,7 @@ function projectToolEvent(
   const detail: { path?: string; command?: string } = {};
   if (path !== undefined) {
     const rel = relativePath(path, ctx.repoRoot);
-    if (rel !== null && !CONTROL_CHARS.test(rel)) detail.path = rel;
+    if (rel !== null && !UNSAFE_PATH_CHARS.test(rel)) detail.path = rel;
   }
   if (command !== undefined) {
     const form = restrictedForm(command);
@@ -197,7 +204,7 @@ function sensitiveDetail(
   const todos = field(spec.todos);
   if (Array.isArray(todos)) {
     const subjects: Array<{ subject: string; status: NonNullable<ReturnType<typeof todoStatus>> }> = [];
-    for (let i = 0; i < todos.length && subjects.length < TODO_MAX_ITEMS; i++) {
+    for (let i = 0; i < todos.length && i < TODO_MAX_SCAN && subjects.length < TODO_MAX_ITEMS; i++) {
       const item = own(todos, String(i));
       if (!isRecord(item)) continue;
       const content = own(item, 'content');
