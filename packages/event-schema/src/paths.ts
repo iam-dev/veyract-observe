@@ -38,7 +38,11 @@ const TEST_DIRS: ReadonlySet<string> = new Set(['test', 'tests', '__tests__', 's
 /** Coarse class of a path; precedence: none, outside, test, config, docs, source. Lexical only. */
 export function pathCategory(absPath: string | undefined, repoRoot: string | null): PathCategory {
   if (absPath === undefined) return 'none';
-  const rel = relativePath(absPath, repoRoot);
+  return categoryOfRelative(relativePath(absPath, repoRoot));
+}
+
+/** The category of a `relativePath` result (null = outside). For callers that already hold it. */
+export function categoryOfRelative(rel: string | null): PathCategory {
   if (rel === null) return 'outside';
   const segs = rel.split('/');
   const base = segs[segs.length - 1] ?? '';

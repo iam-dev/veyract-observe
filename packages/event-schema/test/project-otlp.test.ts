@@ -236,6 +236,7 @@ describe('attributes', () => {
     expect(kind).toBe('stream');
     const parsed = JSON.parse(canon) as Record<string, unknown>;
     expect(Object.keys(parsed)).toEqual(['instrument', 'monotonic', 'pointAttributes', 'resource', 'scope', 'temporality', 'unit']);
+    expect([1, 2]).toContain(parsed['temporality']); // the OTLP enum code, not the 'delta' / 'cumulative' label
     expect(canon.indexOf('"a"')).toBeLessThan(canon.indexOf('"b"'));
     expect(canon.indexOf('"y"')).toBeLessThan(canon.indexOf('"z"'));
   });

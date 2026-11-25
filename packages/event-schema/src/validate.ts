@@ -3,7 +3,9 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const AGENT_ID = /^[A-Za-z0-9]{1,64}$/;
-const TASK_ID = /^[A-Z][A-Z0-9]{1,9}-\d{1,6}$/;
+/** Task id shape (e.g. `VO-12`), unanchored source: shared with the task-tag command and confirm line. */
+export const TASK_ID_SOURCE = '[A-Z][A-Z0-9]{1,9}-\\d{1,6}';
+const TASK_ID = new RegExp(`^${TASK_ID_SOURCE}$`);
 
 function match(re: RegExp, raw: unknown): string | undefined {
   return typeof raw === 'string' && re.test(raw) ? raw : undefined;

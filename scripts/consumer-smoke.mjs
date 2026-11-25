@@ -2,26 +2,16 @@
 // Clean-consumer check: pack every workspace package, install the tarballs into
 // a scratch project and import the public entry points.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const pkgRoot = join(root, 'packages');
-const packages = existsSync(pkgRoot)
-  ? readdirSync(pkgRoot).filter((n) => existsSync(join(pkgRoot, n, 'package.json')))
-  : [];
 
-if (packages.length === 0) {
-  console.log('consumer-smoke: no packages to pack yet, nothing to check');
-  process.exit(0);
-}
-
-// Fixed expected public exports. A package absent from packages/ is skipped;
-// a package that is present must pack, install and expose every export.
+// Fixed expected public exports: every package must pack, install and expose them.
 const EXPECTED = {
-  '@veyract/redaction': { redact: 'function', truncate: 'function', MAX_REDACT_INPUT: 'number' },
+  '@veyract/redaction': { redact: 'function', truncate: 'function', redactAndTruncate: 'function', MAX_REDACT_INPUT: 'number' },
   '@veyract/event-schema': {
     projectHookPayload: 'function',
     recognizeTaskTag: 'function',
@@ -45,9 +35,8 @@ try {
   const installed = new Set(readdirSync(join(proj, 'node_modules', '@veyract')).map((n) => `@veyract/${n}`));
   let failed = false;
   for (const [name, exports] of Object.entries(EXPECTED)) {
-    if (!packages.includes(name.split('/')[1])) continue; // not created yet
     if (!installed.has(name)) {
-      console.error(`consumer-smoke: ${name} is in packages/ but did not install from its tarball`);
+      console.error(`consumer-smoke: ${name} did not install from its tarball`);
       failed = true;
       continue;
     }

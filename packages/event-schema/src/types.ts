@@ -2,13 +2,22 @@ import type { SessionSource, SessionEndReason, TodoStatus } from './allowlists.j
 
 export type DetailLevel = 'metadata' | 'detailed' | 'sensitive-local';
 
-export type HookEventName =
-  | 'SessionStart' | 'SessionEnd' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse'
-  | 'PostToolUseFailure' | 'PermissionRequest' | 'SubagentStart' | 'SubagentStop' | 'Stop';
+/** Supported hook events and the event type each projects to: the single source for both unions. */
+export const HOOK_EVENT_TYPES = Object.freeze({
+  SessionStart: 'session.started',
+  SessionEnd: 'session.ended',
+  UserPromptSubmit: 'prompt.submitted',
+  PreToolUse: 'tool.requested',
+  PostToolUse: 'tool.completed',
+  PostToolUseFailure: 'tool.failed',
+  PermissionRequest: 'permission.requested',
+  SubagentStart: 'subagent.started',
+  SubagentStop: 'subagent.stopped',
+  Stop: 'agent.stopped',
+} as const);
 
-export type EventType =
-  | 'session.started' | 'session.ended' | 'prompt.submitted' | 'tool.requested' | 'tool.completed'
-  | 'tool.failed' | 'permission.requested' | 'subagent.started' | 'subagent.stopped' | 'agent.stopped';
+export type HookEventName = keyof typeof HOOK_EVENT_TYPES;
+export type EventType = typeof HOOK_EVENT_TYPES[HookEventName];
 
 export type PathCategory = 'source' | 'test' | 'config' | 'docs' | 'outside' | 'none';
 
