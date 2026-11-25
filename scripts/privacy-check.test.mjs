@@ -1,5 +1,5 @@
 import { findViolations } from './privacy-check.mjs';
-import { isEmailExempt, isAllowedRemote, resolveRange } from './publication-gate.mjs';
+import { isEmailExempt, isAllowedRemote, isExemptMerge, resolveRange } from './publication-gate.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -248,4 +248,14 @@ test('publication gate checks the configured origin URL, not an insteadOf rewrit
   expect(runGate(dir)).toBe(0);
   git(dir, ['remote', 'set-url', 'origin', 'git@github.com:someone-else/repo.git']);
   expect(runGate(dir)).toBe(1);
+});
+
+test('merge exemption: listed full SHA only, and only when the merge tree equals its second parent tree', () => {
+  const MERGE = '7640f5c2a033fc7fed3ed49707f9187e6a8a04e3';
+  const same = () => 'tree-a';
+  expect(isExemptMerge(MERGE, same)).toBe(true);
+  expect(isExemptMerge(MERGE.slice(0, 10), same)).toBe(false);
+  expect(isExemptMerge('f'.repeat(40), same)).toBe(false);
+  expect(isExemptMerge(MERGE, (rev) => (rev.endsWith('^2') ? 'tree-b' : 'tree-a'))).toBe(false);
+  expect(isExemptMerge(MERGE, () => null)).toBe(false);
 });
