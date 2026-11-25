@@ -12,7 +12,7 @@ import * as validate from './validate.js';
 
 export const TASK_TAG_CONFIRM = /^veyract-observe: (tagged ([A-Z][A-Z0-9]{1,9}-\d{1,6})|untagged) #[0-9a-f]{8}$/m;
 
-const TASK_COMMAND = /^\s*veyract observe task ([A-Z][A-Z0-9]{1,9}-\d{1,6}|--none)\s*$/;
+const TASK_COMMAND = /^[ \t]*veyract[ \t]+observe[ \t]+task[ \t]+([A-Z][A-Z0-9]{1,9}-\d{1,6}|--none)[ \t]*$/;
 const CONFIRM_LINE = new RegExp(TASK_TAG_CONFIRM.source);
 
 function own(obj: unknown, key: string): unknown {
