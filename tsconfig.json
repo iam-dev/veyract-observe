@@ -1,4 +1,4 @@
 {
   "include": [],
-  "references": [{ "path": "packages/redaction" }]
+  "references": [{ "path": "packages/redaction" }, { "path": "packages/event-schema" }]
 }
