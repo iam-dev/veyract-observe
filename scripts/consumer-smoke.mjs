@@ -18,11 +18,17 @@ if (packages.length === 0) {
   process.exit(0);
 }
 
-// Entry points the clean consumer must be able to import, and the export each must have.
-const CHECKS = [
-  { name: '@veyract/event-schema', exportName: 'projectHookEvent' },
-  { name: '@veyract/redaction', exportName: 'redactText' },
-];
+// Fixed expected public exports. A package absent from packages/ is skipped;
+// a package that is present must pack, install and expose every export.
+const EXPECTED = {
+  '@veyract/redaction': { redact: 'function', truncate: 'function', MAX_REDACT_INPUT: 'number' },
+  '@veyract/event-schema': {
+    projectHookPayload: 'function',
+    recognizeTaskTag: 'function',
+    projectOtlpMetrics: 'function',
+    projectOtlpLogs: 'function',
+  },
+};
 
 const work = mkdtempSync(join(tmpdir(), 'vo-consumer-'));
 try {
@@ -37,12 +43,27 @@ try {
   execFileSync('npm', ['install', '--no-audit', '--no-fund', ...tarballs], { cwd: proj, stdio: 'inherit' });
 
   const installed = new Set(readdirSync(join(proj, 'node_modules', '@veyract')).map((n) => `@veyract/${n}`));
-  for (const { name, exportName } of CHECKS) {
-    if (!installed.has(name)) continue; // package not created yet
-    const script = `const m = await import(${JSON.stringify(name)}); if (typeof m[${JSON.stringify(exportName)}] !== 'function') { console.error('missing export ${exportName} in ${name}'); process.exit(1); }`;
-    execFileSync('node', ['--input-type=module', '-e', script], { cwd: proj, stdio: 'inherit' });
-    console.log(`consumer-smoke: ${name} ok`);
+  let failed = false;
+  for (const [name, exports] of Object.entries(EXPECTED)) {
+    if (!packages.includes(name.split('/')[1])) continue; // not created yet
+    if (!installed.has(name)) {
+      console.error(`consumer-smoke: ${name} is in packages/ but did not install from its tarball`);
+      failed = true;
+      continue;
+    }
+    const script = `const m = await import(${JSON.stringify(name)});
+const want = ${JSON.stringify(exports)};
+const bad = Object.entries(want).filter(([k, t]) => typeof m[k] !== t).map(([k, t]) => k + ' (' + t + ')');
+if (bad.length) { console.error('missing or wrong-typed exports: ' + bad.join(', ')); process.exit(1); }`;
+    try {
+      execFileSync('node', ['--input-type=module', '-e', script], { cwd: proj, stdio: 'inherit' });
+      console.log(`consumer-smoke: ${name} ok`);
+    } catch {
+      console.error(`consumer-smoke: ${name} does not expose its expected exports`);
+      failed = true;
+    }
   }
+  if (failed) process.exitCode = 1;
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

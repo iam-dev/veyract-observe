@@ -1,6 +1,6 @@
 import { findViolations } from './privacy-check.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,6 +98,31 @@ test('publication gate catches a value added and removed within the range, and a
   commit(clean, 'a.txt', 'clean\n', 'chore: base');
   commit(clean, 'b.txt', 'clean\n', 'chore: other');
   expect(runGate(clean)).toBe(0);
+});
+
+test('publication gate requires the exact noreply email for author and committer', () => {
+  const author = makeRepo();
+  commit(author, 'a.txt', 'clean\n', 'chore: base');
+  commit(author, 'b.txt', 'clean\n', 'chore: other', { GIT_AUTHOR_EMAIL: 'other@users.noreply.github.com' });
+  expect(runGate(author)).toBe(1);
+
+  const committer = makeRepo();
+  commit(committer, 'a.txt', 'clean\n', 'chore: base');
+  commit(committer, 'b.txt', 'clean\n', 'chore: other', { GIT_COMMITTER_EMAIL: 'other@users.noreply.github.com' });
+  expect(runGate(committer)).toBe(1);
+});
+
+test('publication gate scans lines starting with ++ and file names', () => {
+  const plus = makeRepo();
+  commit(plus, 'a.txt', 'clean\n', 'chore: base');
+  commit(plus, 'b.txt', '++' + homePath + '\n', 'chore: plus');
+  expect(runGate(plus)).toBe(1);
+
+  const named = makeRepo();
+  commit(named, 'a.txt', 'clean\n', 'chore: base');
+  mkdirSync(join(named, 'sub/ho' + 'me/alice'), { recursive: true });
+  commit(named, 'sub/ho' + 'me/alice/f.txt', 'clean\n', 'chore: named');
+  expect(runGate(named)).toBe(1);
 });
 
 test('publication gate fails on a wrong remote URL', () => {
