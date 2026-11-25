@@ -75,10 +75,20 @@ function redactJwtInRun(run: string, onHit: () => void): string {
   return out;
 }
 
-// A secret value: a quoted run up to the closing quote (or end of line), so `"two words"` leaves nothing,
-// or an unquoted run. Groups: 2 = double quote, 3 = single quote (an optional escaping backslash is kept).
-// The quoted runs are the last element of the pattern, so the scan stays linear.
-const VALUE = String.raw`(?:(\\?")(?!\[REDACTED:)[^"\n]*|(\\?')(?!\[REDACTED:)[^'\n]*|(?!\[REDACTED:)[^\s"']+)`;
+// A secret value. Quoted values are escape-aware and may span lines: the run ends at the closing quote,
+// or at the end of the input when unterminated, so `"a\"b"`, `"two words"` and multi-line values leave
+// nothing. Alternatives (group = opening quote, kept in the output):
+//   2: JSON-escaped `\"…\"`  — ends before the next `\"`;
+//   3: `"…"` and 4: `'…'`    — a backslash escapes the next character;
+//   unquoted run             — up to whitespace or a quote.
+// Each quoted body is a star over first-character-disjoint alternatives and is the last element of the
+// pattern, so the scan stays linear. A value that is exactly one existing marker is skipped (no double
+// redaction); a value that merely starts with a marker is still redacted.
+const MARKER_ONLY = String.raw`\[REDACTED:[a-z-]{1,32}\]`;
+const VALUE = String.raw`(?:(\\")(?!${MARKER_ONLY}\\")(?:[^\\]|\\(?!"))*`
+  + String.raw`|(")(?!${MARKER_ONLY}")(?:[^"\\]|\\[\s\S])*`
+  + String.raw`|(')(?!${MARKER_ONLY}')(?:[^'\\]|\\[\s\S])*`
+  + String.raw`|(?!\[REDACTED:)[^\s"']+)`;
 const FLAG = new RegExp(String.raw`(--(?:password|token|secret|api-key)(?:\s{1,8}|=))` + VALUE, 'gi');
 // The optional (escaped) quote after the key covers JSON: {"password": "x"}.
 const ASSIGNMENT = new RegExp(
@@ -114,10 +124,10 @@ export function redact(text: string): RedactResult {
   let out = pk.text;
   n += pk.count;
 
-  const sub = (re: RegExp, build: (m: string, p1: string, q2?: string, q3?: string) => string): void => {
-    out = out.replace(re, (m: string, p1: string, q2?: string, q3?: string) => {
+  const sub = (re: RegExp, build: (m: string, p1: string, quote: string) => string): void => {
+    out = out.replace(re, (m: string, p1: string, q2?: string, q3?: string, q4?: string) => {
       n++;
-      return build(m, p1, q2, q3);
+      return build(m, p1, q2 ?? q3 ?? q4 ?? '');
     });
   };
 
@@ -126,8 +136,8 @@ export function redact(text: string): RedactResult {
   for (const [re, kind] of TOKEN_FORMATS) sub(re, () => marker(kind));
   // Every JWT has an "eyJ" segment: skip the per-run pass when there is none.
   if (out.includes('eyJ')) out = out.replace(DOTTED_RUN, (run: string) => redactJwtInRun(run, () => n++));
-  sub(FLAG, (_m, prefix, q2, q3) => `${prefix}${q2 ?? q3 ?? ''}${marker('flag')}`);
-  sub(ASSIGNMENT, (_m, prefix, q2, q3) => `${prefix}${q2 ?? q3 ?? ''}${marker('assignment')}`);
+  sub(FLAG, (_m, prefix, quote) => `${prefix}${quote}${marker('flag')}`);
+  sub(ASSIGNMENT, (_m, prefix, quote) => `${prefix}${quote}${marker('assignment')}`);
 
   return { text: out, redactions: n, omitted: false };
 }

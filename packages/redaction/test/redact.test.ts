@@ -111,3 +111,32 @@ test('pathological quoted inputs finish fast', () => {
     const t = performance.now(); redact(s); expect(performance.now() - t).toBeLessThan(200);
   }
 });
+test('R3-02: escaped quotes, multi-line values and embedded markers leave nothing behind', () => {
+  const a = 'fir' + 'st', b = 'sec' + 'ond';
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    [`--pass` + `word "${a}\\"${b}" db`, '--password "[REDACTED:flag]" db'],
+    [`PASS` + `WORD='${a}\\'${b}' x`, `PASSWORD='[REDACTED:assignment]' x`],
+    [`--to` + `ken "${a}\n${b}" end`, '--token "[REDACTED:flag]" end'],
+    [`{\\"sec` + `ret\\":\\"${a}\\"}`, '{\\"secret\\":\\"[REDACTED:assignment]\\"}'],
+    [`--pass` + `word "${a}\n${b}`, '--password "[REDACTED:flag]'], // unterminated: to the end of the input
+  ];
+  for (const [input, expected] of cases) {
+    const r = redact(input);
+    expect(r.text, input).toBe(expected);
+    expect(r.text).not.toContain(a);
+    expect(r.text).not.toContain(b);
+  }
+  // A value that starts with a marker from an earlier pass is still redacted as a whole.
+  const ghp = 'gh' + 'p_' + 'A'.repeat(36);
+  const marked = redact(`--pass` + `word "${ghp} ${b}" x`);
+  expect(marked.text).toBe('--password "[REDACTED:flag]" x');
+  // A value that is exactly one marker is not redacted twice.
+  expect(redact(`--pass` + `word="${a}"`).text).toBe('--password="[REDACTED:flag]"');
+  expect(redact(`--pass` + `word="${a}"`).redactions).toBe(1);
+});
+test('R3-02: pathological escaped input finishes fast', () => {
+  for (const s of [`--password "${'\\"'.repeat(32_000)}`, `password=\\"${'\\x'.repeat(32_000)}`, `token='${"\\'".repeat(32_000)}`]) {
+    expect(s.length).toBeLessThanOrEqual(65_536);
+    const t = performance.now(); redact(s); expect(performance.now() - t).toBeLessThan(200);
+  }
+});
